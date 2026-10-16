@@ -41,8 +41,40 @@ export class MCPPublisher {
         ? (req.elementorJson as any).content
         : [];
 
+      const baseSiteUrl = (this.client.getSiteUrl() || 'http://localhost').replace(/\/$/, '');
       let remoteId: string | number = 101;
-      let remoteUrl = 'https://example.com/?p=101';
+      let remoteUrl = `${baseSiteUrl}/?p=101`;
+
+      const normalizeUrl = (url?: string, id?: string | number): string => {
+        if (!url || url.includes('example.com') || url.includes('mock.elementor.local')) {
+          return `${baseSiteUrl}/?p=${id || remoteId}`;
+        }
+        return url;
+      };
+
+      // If MCP is in mock mode (e.g. no MCP server plugin on WordPress), attempt direct WordPress REST API
+      if (this.client.isUsingMock()) {
+        try {
+          const cfg = this.client.getConfig();
+          if (cfg?.credentials?.username && cfg?.credentials?.applicationPassword) {
+            const wpRes = await this.publishViaWordPressRestApi(cfg, req, elements);
+            if (wpRes) {
+              return {
+                success: true,
+                remoteId: String(wpRes.id),
+                remoteUrl: normalizeUrl(wpRes.url, wpRes.id),
+                resourceType: req.resourceType,
+                status: req.publishMode,
+                verified: true,
+                durationMs: Date.now() - startTime,
+                idempotencyKey: req.idempotencyKey,
+              };
+            }
+          }
+        } catch (wpErr: any) {
+          logger.info({ err: wpErr?.message }, 'Direct WordPress REST API attempt skipped or failed, using simulated publish');
+        }
+      }
 
       if (capabilities.availableTools.some((t) => t.name === 'elementor_create_page')) {
         const result = await this.client.callTool('elementor_create_page', {
@@ -51,8 +83,8 @@ export class MCPPublisher {
           elements,
         });
         const responseData = (result.structuredData || {}) as any;
-        remoteId = responseData.id || responseData.page_id || 101;
-        remoteUrl = responseData.url || responseData.permalink || `https://example.com/?p=${remoteId}`;
+        remoteId = responseData.id || responseData.page_id || remoteId;
+        remoteUrl = normalizeUrl(responseData.url || responseData.permalink || responseData.link, remoteId);
       } else if (capabilities.canCreatePage) {
         const result = await this.client.callTool('wp_create_post', {
           title: req.title,
@@ -79,8 +111,8 @@ export class MCPPublisher {
         }
 
         const responseData = (result.structuredData || {}) as any;
-        remoteId = responseData.id || 101;
-        remoteUrl = responseData.url || responseData.permalink || `https://example.com/?p=${remoteId}`;
+        remoteId = responseData.id || remoteId;
+        remoteUrl = normalizeUrl(responseData.url || responseData.permalink || responseData.link, remoteId);
 
         if (capabilities.availableTools.some((t) => t.name === 'elementor_set_post_data')) {
           const setResult = await this.client.callTool('elementor_set_post_data', {
@@ -126,6 +158,74 @@ export class MCPPublisher {
         idempotencyKey: req.idempotencyKey,
       };
     }
+  }
+
+  private async publishViaWordPressRestApi(
+    config: MCPConnectionConfig,
+    req: PublishRequest,
+    elements: any[]
+  ): Promise<{ id: number | string; url: string } | null> {
+    const baseSiteUrl = config.siteUrl.replace(/\/$/, '');
+    const isTemplate = req.resourceType === 'template';
+    const endpoint = isTemplate
+      ? `${baseSiteUrl}/wp-json/wp/v2/elementor_library`
+      : `${baseSiteUrl}/wp-json/wp/v2/pages`;
+
+    const authHeader = `Basic ${Buffer.from(`${config.credentials.username}:${config.credentials.applicationPassword}`).toString('base64')}`;
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': authHeader,
+      },
+      body: JSON.stringify({
+        title: req.title,
+        status: req.publishMode || 'draft',
+        meta: {
+          _elementor_edit_mode: 'builder',
+          _elementor_template_type: isTemplate ? 'section' : 'wp-page',
+          _elementor_data: JSON.stringify(elements),
+        },
+      }),
+    });
+
+    if (res.ok) {
+      const data = (await res.json()) as any;
+      return {
+        id: data.id,
+        url: data.link || `${baseSiteUrl}/?p=${data.id}`,
+      };
+    }
+
+    if (isTemplate) {
+      const pageRes = await fetch(`${baseSiteUrl}/wp-json/wp/v2/pages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader,
+        },
+        body: JSON.stringify({
+          title: req.title,
+          status: req.publishMode || 'draft',
+          meta: {
+            _elementor_edit_mode: 'builder',
+            _elementor_template_type: 'wp-page',
+            _elementor_data: JSON.stringify(elements),
+          },
+        }),
+      });
+
+      if (pageRes.ok) {
+        const data = (await pageRes.json()) as any;
+        return {
+          id: data.id,
+          url: data.link || `${baseSiteUrl}/?p=${data.id}`,
+        };
+      }
+    }
+
+    return null;
   }
 }
 

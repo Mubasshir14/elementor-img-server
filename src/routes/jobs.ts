@@ -51,10 +51,10 @@ jobsRouter.get('/:id/dir', async (req: Request, res: Response, next: NextFunctio
     }
 
     if (!job.dirArtifact) {
-      throw new NotFoundError('DIR JSON not ready for this job');
+      return res.json({ success: true, data: null, ready: false, message: 'DIR JSON not ready for this job' });
     }
 
-    res.json({ success: true, data: job.dirArtifact });
+    res.json({ success: true, data: job.dirArtifact, ready: true });
   } catch (err) {
     next(err);
   }
@@ -75,10 +75,10 @@ jobsRouter.get('/:id/elementor', async (req: Request, res: Response, next: NextF
     }
 
     if (!job.elementorArtifact) {
-      throw new NotFoundError('Elementor JSON not ready for this job');
+      return res.json({ success: true, data: null, ready: false, message: 'Elementor JSON not ready for this job' });
     }
 
-    res.json({ success: true, data: job.elementorArtifact });
+    res.json({ success: true, data: job.elementorArtifact, ready: true });
   } catch (err) {
     next(err);
   }

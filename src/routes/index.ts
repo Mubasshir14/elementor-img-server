@@ -48,6 +48,7 @@ apiRouter.use('/projects', projectsRouter);
 apiRouter.use('/projects', uploadRouter);
 apiRouter.use('/jobs', jobsRouter);
 apiRouter.use('/jobs', publishRouter);
+apiRouter.use('/publish', publishRouter);
 apiRouter.use('/sites', sitesRouter);
 
 export default apiRouter;

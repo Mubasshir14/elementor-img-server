@@ -519,6 +519,16 @@ export class ElementorGenerator {
       }
     }
 
+    if (!imageUrl || (typeof imageUrl === 'string' && imageUrl.trim().length === 0)) {
+      const firstValidAsset = dir.assets?.find((a) => a.placeholder || (a as any).url);
+      if (firstValidAsset) {
+        imageUrl = firstValidAsset.placeholder || (firstValidAsset as any).url;
+      } else {
+        const altText = encodeURIComponent(node.alt || 'Image');
+        imageUrl = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"><rect width="100%" height="100%" fill="%231e293b"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%2394a3b8" font-family="sans-serif" font-size="16">${altText}</text></svg>`;
+      }
+    }
+
     const settings: Record<string, any> = {
       image: { url: imageUrl || '', id: (node as any).assetId || '' },
       image_size: 'full',

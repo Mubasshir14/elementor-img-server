@@ -27,6 +27,18 @@ export class MCPClient {
     }
   }
 
+  public getSiteUrl(): string {
+    return this.config.siteUrl;
+  }
+
+  public getConfig(): MCPConnectionConfig {
+    return this.config;
+  }
+
+  public isUsingMock(): boolean {
+    return !!this.mockServer;
+  }
+
   public async connect(): Promise<MCPInitializeResult> {
     if (this.mockServer) {
       const response = await this.mockServer.handleMessage({

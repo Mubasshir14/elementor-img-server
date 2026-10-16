@@ -400,60 +400,132 @@ export class ConversionOrchestrator {
     sourceAsset: any,
     dirDoc: DIRDocument
   ): Promise<void> {
-    if (!sourceAsset?.storagePath || !dirDoc.assets || dirDoc.assets.length === 0) {
-      return;
+    if (!dirDoc.assets) {
+      dirDoc.assets = [];
     }
 
+    // 1. Traverse all pages and sections to collect all image nodes
+    const imageNodes: any[] = [];
+    const collectImageNodes = (node: any) => {
+      if (node.kind === 'image') {
+        imageNodes.push(node);
+      }
+      const children = node.children || node.nodes || node.elements;
+      if (children && Array.isArray(children)) {
+        for (const child of children) {
+          collectImageNodes(child);
+        }
+      }
+    };
+
+    if (dirDoc.pages) {
+      for (const page of dirDoc.pages) {
+        if (page.sections) {
+          for (const sec of page.sections) {
+            const secChildren = sec.children || (sec as any).nodes || (sec as any).elements;
+            if (secChildren && Array.isArray(secChildren)) {
+              for (const child of secChildren) {
+                collectImageNodes(child);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Ensure every image node has an asset registered in dirDoc.assets
+    for (const node of imageNodes) {
+      if (!node.assetId) {
+        node.assetId = `asset_${node.id || Math.random().toString(36).substring(2, 9)}`;
+      }
+      if (!dirDoc.assets.some((a) => a.id === node.assetId)) {
+        dirDoc.assets.push({
+          id: node.assetId,
+          type: 'image',
+          role: node.alt || 'page-image',
+          confidence: node.confidence || 0.95,
+          sourceRect: (node as any).sourceRect,
+        });
+      }
+    }
+
+    // 3. Download source asset buffer if available for cropping
     let sourceBuffer: Buffer | null = null;
-    try {
-      sourceBuffer = await this.storage.download(sourceAsset.storagePath);
-    } catch (err: any) {
-      logger.warn({ storagePath: sourceAsset.storagePath, err: err?.message }, 'Could not download source asset for sub-asset extraction');
-      return;
-    }
-
     let meta: { width: number; height: number } | null = null;
-    try {
-      meta = await getImageMetadata(sourceBuffer);
-    } catch (metaErr: any) {
-      logger.warn({ err: metaErr?.message }, 'Failed to read image metadata for asset bounds checking');
+    if (sourceAsset?.storagePath) {
+      try {
+        sourceBuffer = await this.storage.download(sourceAsset.storagePath);
+        meta = await getImageMetadata(sourceBuffer);
+      } catch (err: any) {
+        logger.warn({ storagePath: sourceAsset.storagePath, err: err?.message }, 'Could not download/inspect source asset for sub-asset extraction');
+      }
     }
 
+    // 4. Resolve and extract cropped assets for all visual assets or referenced assets
     for (const asset of dirDoc.assets) {
-      if (['image', 'logo', 'background'].includes(asset.type) && !asset.placeholder) {
+      const isReferencedByImage = imageNodes.some((n) => n.assetId === asset.id);
+      const isVisualType = ['image', 'logo', 'icon', 'background', 'placeholder'].includes(asset.type);
+
+      if ((isVisualType || isReferencedByImage) && !asset.placeholder) {
         let cropBuffer: Buffer | null = null;
-        if (asset.sourceRect && asset.sourceRect.width > 10 && asset.sourceRect.height > 10) {
-          let safeRect = asset.sourceRect;
-          if (meta && meta.width > 0 && meta.height > 0) {
-            const clampedX = Math.max(0, Math.min(meta.width - 1, safeRect.x));
-            const clampedY = Math.max(0, Math.min(meta.height - 1, safeRect.y));
-            const clampedWidth = Math.min(meta.width - clampedX, Math.max(10, safeRect.width));
-            const clampedHeight = Math.min(meta.height - clampedY, Math.max(10, safeRect.height));
-            safeRect = { x: clampedX, y: clampedY, width: clampedWidth, height: clampedHeight };
+
+        if (sourceBuffer) {
+          // Attempt A: Exact bounding box cropping from sourceRect
+          if (asset.sourceRect && asset.sourceRect.width >= 4 && asset.sourceRect.height >= 4) {
+            let safeRect = asset.sourceRect;
+            if (meta && meta.width > 0 && meta.height > 0) {
+              const clampedX = Math.max(0, Math.min(meta.width - 1, safeRect.x));
+              const clampedY = Math.max(0, Math.min(meta.height - 1, safeRect.y));
+              const clampedWidth = Math.min(meta.width - clampedX, Math.max(4, safeRect.width));
+              const clampedHeight = Math.min(meta.height - clampedY, Math.max(4, safeRect.height));
+              safeRect = { x: clampedX, y: clampedY, width: clampedWidth, height: clampedHeight };
+            }
+            try {
+              cropBuffer = await cropAsset(sourceBuffer, safeRect);
+            } catch (cropErr: any) {
+              logger.warn({ assetId: asset.id, err: cropErr?.message }, 'Failed to crop asset from sourceRect');
+            }
           }
-          try {
-            cropBuffer = await cropAsset(sourceBuffer, safeRect);
-          } catch (cropErr: any) {
-            logger.warn({ assetId: asset.id, err: cropErr?.message }, 'Failed to crop asset from sourceRect');
+
+          // Attempt B: Proportional fallback extraction based on role/type if sourceRect failed or missing
+          if (!cropBuffer) {
+            try {
+              const imgMeta = meta || (await getImageMetadata(sourceBuffer));
+              const w = imgMeta.width;
+              const h = imgMeta.height;
+              const roleLower = (asset.role || '').toLowerCase();
+
+              let fallbackRect = {
+                x: Math.round(w * 0.15),
+                y: Math.round(h * 0.2),
+                width: Math.round(w * 0.7),
+                height: Math.round(h * 0.55),
+              };
+
+              if (asset.type === 'logo' || roleLower.includes('logo') || roleLower.includes('crest')) {
+                fallbackRect = {
+                  x: Math.round(w * 0.05),
+                  y: Math.round(h * 0.03),
+                  width: Math.min(w, Math.max(32, Math.round(w * 0.25))),
+                  height: Math.min(h, Math.max(24, Math.round(h * 0.12))),
+                };
+              } else if (asset.type === 'icon' || roleLower.includes('icon') || roleLower.includes('dumbbell')) {
+                fallbackRect = {
+                  x: Math.round(w * 0.1),
+                  y: Math.round(h * 0.05),
+                  width: Math.min(w, Math.max(24, Math.round(w * 0.1))),
+                  height: Math.min(h, Math.max(24, Math.round(h * 0.08))),
+                };
+              }
+
+              cropBuffer = await cropAsset(sourceBuffer, fallbackRect);
+            } catch (fallbackErr: any) {
+              logger.warn({ assetId: asset.id, err: fallbackErr?.message }, 'Failed to extract fallback crop region');
+            }
           }
         }
 
-        if (!cropBuffer && (asset.role?.toLowerCase().includes('hero') || asset.role?.toLowerCase().includes('graphic') || asset.role?.toLowerCase().includes('flower') || asset.role?.toLowerCase().includes('3d') || asset.role?.toLowerCase().includes('athlete'))) {
-          try {
-            const imgMeta = meta || await getImageMetadata(sourceBuffer);
-            const w = imgMeta.width;
-            const h = imgMeta.height;
-            cropBuffer = await cropAsset(sourceBuffer, {
-              x: Math.round(w * 0.2),
-              y: Math.round(h * 0.35),
-              width: Math.round(w * 0.6),
-              height: Math.round(h * 0.55),
-            });
-          } catch (cropErr: any) {
-            logger.warn({ assetId: asset.id, err: cropErr?.message }, 'Failed to extract fallback hero graphic');
-          }
-        }
-
+        // Attempt C: Persist extracted cropBuffer to local storage & DB
         if (cropBuffer) {
           try {
             const assetHash = computeContentHash(cropBuffer);
@@ -472,7 +544,7 @@ export class ConversionOrchestrator {
                 storagePath: uploadRes.key,
                 sha256: assetHash,
                 metadata: {
-                  extractedFromAssetId: sourceAsset.id,
+                  extractedFromAssetId: sourceAsset?.id || null,
                   role: asset.role,
                 },
               },
@@ -482,18 +554,39 @@ export class ConversionOrchestrator {
             logger.warn({ assetId: asset.id, err: uploadErr?.message }, 'Failed to store extracted asset');
           }
         }
+
+        // Attempt D: If cropBuffer not available, fallback to sourceAsset storagePath or inline SVG
+        if (!asset.placeholder) {
+          if (sourceAsset?.storagePath) {
+            asset.placeholder = `/storage/${sourceAsset.storagePath}`;
+          } else {
+            const safeLabel = encodeURIComponent(asset.role || asset.id || 'Image');
+            asset.placeholder = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><rect width="100%" height="100%" fill="%231e293b"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%2394a3b8" font-family="sans-serif" font-size="14">${safeLabel}</text></svg>`;
+          }
+        }
       }
     }
 
+    // 5. Propagate resolved URLs down to all image nodes in the DIR tree
     const updateNodeUrls = (node: any) => {
-      if (node.kind === 'image' && node.assetId) {
-        const matching = dirDoc.assets?.find((a) => a.id === node.assetId);
-        if (matching?.placeholder && !node.url) {
-          node.url = matching.placeholder;
+      if (node.kind === 'image') {
+        if (!node.url && node.assetId) {
+          const matching = dirDoc.assets?.find((a) => a.id === node.assetId);
+          if (matching?.placeholder) {
+            node.url = matching.placeholder;
+          }
+        }
+        if (!node.url && sourceAsset?.storagePath) {
+          node.url = `/storage/${sourceAsset.storagePath}`;
+        }
+        if (!node.url) {
+          const safeAlt = encodeURIComponent(node.alt || 'Image');
+          node.url = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><rect width="100%" height="100%" fill="%231e293b"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%2394a3b8" font-family="sans-serif" font-size="14">${safeAlt}</text></svg>`;
         }
       }
-      if (node.children && Array.isArray(node.children)) {
-        for (const child of node.children) {
+      const children = node.children || node.nodes || node.elements;
+      if (children && Array.isArray(children)) {
+        for (const child of children) {
           updateNodeUrls(child);
         }
       }
@@ -503,8 +596,9 @@ export class ConversionOrchestrator {
       for (const page of dirDoc.pages) {
         if (page.sections) {
           for (const sec of page.sections) {
-            if (sec.children) {
-              for (const child of sec.children) {
+            const secChildren = sec.children || (sec as any).nodes || (sec as any).elements;
+            if (secChildren && Array.isArray(secChildren)) {
+              for (const child of secChildren) {
                 updateNodeUrls(child);
               }
             }
