@@ -103,6 +103,14 @@ export class ElementorValidator {
 
       if (element.elType === 'container' || element.elType === 'section' || element.elType === 'column') {
         stats.containers++;
+        if (element.elType === 'section' || element.elType === 'column') {
+          warnings.push({
+            path: `${path}.elType`,
+            message: `Legacy element type "${element.elType}" detected. Modern Elementor requires Flexbox Containers ("container").`,
+            code: 'LEGACY_ELTYPE',
+            elementId: element.id,
+          });
+        }
       }
 
       // Check widgetType
@@ -135,6 +143,13 @@ export class ElementorValidator {
           path: `${path}.settings`,
           message: 'Settings must be an object',
           code: 'INVALID_SETTINGS',
+          elementId: element.id,
+        });
+      } else if (element.settings?.__globals__) {
+        warnings.push({
+          path: `${path}.settings.__globals__`,
+          message: 'Settings contains __globals__ reference which may be overridden by WordPress theme styles.',
+          code: 'THEME_GLOBALS_DETECTED',
           elementId: element.id,
         });
       }

@@ -23,6 +23,7 @@ export function optimizeElementorDocument(doc: ElementorDocument): ElementorDocu
     if (!settings) return {};
     const cleaned: Record<string, any> = {};
     for (const [key, value] of Object.entries(settings)) {
+      if (key === '__globals__') continue; // Enforce direct hex colors, ignore WordPress theme style globals
       if (value === undefined || value === null || value === '') continue;
       if (typeof value === 'object' && !Array.isArray(value)) {
         if ('unit' in value && (value as any).size === undefined && (value as any).column === undefined) continue;
@@ -48,6 +49,8 @@ export function optimizeElementorDocument(doc: ElementorDocument): ElementorDocu
 
   return {
     version: doc.version || '0.4',
+    elementor_version: doc.elementor_version || '3.24.7',
+    wp_version: doc.wp_version || '6.6.2',
     title: doc.title || 'Exported Template',
     type: doc.type || 'page',
     page_settings: cleanSettings(doc.page_settings) || {
@@ -64,6 +67,8 @@ export function serializeElementorTemplate(
   const optimized = options?.optimize !== false ? optimizeElementorDocument(doc) : doc;
   const envelope = {
     version: optimized.version || '0.4',
+    elementor_version: optimized.elementor_version || '3.24.7',
+    wp_version: optimized.wp_version || '6.6.2',
     title: optimized.title || 'Exported Template',
     type: optimized.type || 'page',
     content: optimized.content || [],

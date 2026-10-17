@@ -13,6 +13,50 @@
 
 export type DIRVersion = '1.0.0';
 
+export interface DIRCanvasBounds {
+  crop_mockup?: boolean;
+  inner_bg_type?: 'gradient' | 'solid';
+  primary_hex?: string;
+  secondary_hex?: string;
+  gradient_angle?: number;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}
+
+export interface DIRTypographyDetails {
+  font_family_guess?: string;
+  font_size_px?: number;
+  font_weight?: number | string;
+  line_height_em?: number | string;
+  letter_spacing_px?: number;
+  color_hex?: string;
+  inline_color_spans?: Array<{ text: string; color_hex: string }>;
+}
+
+export interface DIRFormDetails {
+  fields?: Array<{
+    placeholder?: string;
+    type?: string;
+    background_hex?: string;
+    border_radius_px?: number;
+  }>;
+  placeholder?: string;
+  background_hex?: string;
+  border_radius_px?: number;
+  field_gap_px?: number;
+  submit_button?: {
+    text?: string;
+    width_type?: 'auto' | 'full';
+    gradient_hex?: string;
+    background_hex?: string;
+    color_hex?: string;
+    border_radius_px?: number;
+    icon_position?: 'left' | 'right' | 'none';
+  };
+}
+
 export interface DIRDocument {
   version: DIRVersion;
   meta: DIRMeta;
@@ -20,6 +64,7 @@ export interface DIRDocument {
   globals: DIRGlobals;
   assets: DIRAsset[];
   pages: DIRPage[];
+  canvas_bounds?: DIRCanvasBounds;
 }
 
 export interface DIRMeta {
@@ -89,6 +134,7 @@ export interface DIRAsset {
   seed?: number;
   prompt?: string;
   generated?: boolean;
+  composite_graphic_asset?: boolean;
   metadata?: Record<string, any>;
 }
 
@@ -138,6 +184,7 @@ export interface DIRSection {
   children: DIRNode[];
   responsiveNotes?: string[];
   responsiveOverrides?: Partial<Record<'tablet' | 'mobile', Partial<DIRStyles>>>;
+  canvas_bounds?: DIRCanvasBounds;
 }
 
 // ─── Nodes ───────────────────────────────────────────────────────────
@@ -178,6 +225,10 @@ export interface DIRNodeBase {
   confidence: number;
   styles: DIRStyles;
   responsiveOverrides?: Partial<Record<'tablet' | 'mobile', Partial<DIRStyles>>>;
+  typography?: DIRTypographyDetails;
+  form_details?: DIRFormDetails;
+  composite_graphic_asset?: boolean;
+  layout_tree?: Record<string, any>;
 }
 
 // ─── Layout Nodes ────────────────────────────────────────────────────

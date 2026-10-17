@@ -12,7 +12,7 @@ import { convertDIRToElementor } from '../elementor/generator.js';
 import { validateElementor } from '../elementor/validator.js';
 import { serializeElementorTemplate } from '../elementor/serializer.js';
 import { getStorage } from '../storage/factory.js';
-import { getImageAnalysisPrompt, getDIRRepairPrompt, getSectionRepairPrompt } from './prompts.js';
+import { getImageAnalysisPrompt, getDIRRepairPrompt, getSectionRepairPrompt, getElementorSelfHealingGatePrompt } from './prompts.js';
 import { cropAsset, getImageMetadata, computeContentHash } from '../storage/image-processor.js';
 import type { DIRDocument } from '../dir/types.js';
 
@@ -97,17 +97,47 @@ export class ConversionOrchestrator {
       // Resolve and extract sub-assets (e.g. hero graphic artwork, logos) from source image
       await this.resolveAndExtractAssets(job, sourceAsset, dirDoc);
 
-      // Stage 3: GENERATING_ELEMENTOR
+      // Stage 3: GENERATING_ELEMENTOR (Stage C)
       await this.updateStatus(jobId, 'generating_elementor', 'elementor_generation');
-      const { document: elementorDoc, report } = convertDIRToElementor(dirDoc);
+      const { document: initialDoc, report } = convertDIRToElementor(dirDoc);
+
+      // Stage 4: VALIDATING_ELEMENTOR & SELF-HEALING GATE (Stage D)
+      await this.updateStatus(jobId, 'validating_elementor', 'elementor_validation');
+      let elementorDoc = initialDoc;
+      let validation = validateElementor(elementorDoc);
+
+      // Execute Stage D Self-Healing Gate if review provider is available or validation found issues
+      if (this.aiRouter.isProviderAvailable('openrouter') && !validation.valid) {
+        try {
+          const healingPrompt = getElementorSelfHealingGatePrompt(dirDoc, elementorDoc, validation.errors);
+          const healRes = await this.aiRouter.execute({
+            role: 'review',
+            messages: [
+              { role: 'system', content: healingPrompt.systemPrompt },
+              { role: 'user', content: healingPrompt.userPrompt },
+            ],
+            responseFormat: { type: 'json_object' },
+            bypassCache: true,
+            maxTokens: 16384,
+          });
+
+          if (healRes.content && healRes.finishReason !== 'length') {
+            const healedJson = JSON.parse(healRes.content);
+            const healedValidation = validateElementor(healedJson);
+            if (healedValidation.valid) {
+              elementorDoc = healedJson;
+              validation = healedValidation;
+              logger.info({ jobId }, 'Stage D Self-Healing Gate successfully patched and validated Elementor AST');
+            }
+          }
+        } catch (healErr: any) {
+          logger.warn({ jobId, err: healErr?.message }, 'Stage D AI self-healing gate encountered error; adhering to compiled AST');
+        }
+      }
 
       // Verify deterministic visual quality & structural completeness
       const qualityAudit = this.verifyVisualQuality(dirDoc, elementorDoc);
       logger.info({ jobId, qualityAudit }, 'Visual quality verification passed');
-
-      // Stage 4: VALIDATING_ELEMENTOR
-      await this.updateStatus(jobId, 'validating_elementor', 'elementor_validation');
-      const validation = validateElementor(elementorDoc);
 
       if (!validation.valid) {
         logger.warn({ jobId, errors: validation.errors }, 'Elementor validation warnings/errors encountered');

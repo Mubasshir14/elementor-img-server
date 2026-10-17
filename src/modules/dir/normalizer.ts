@@ -374,7 +374,7 @@ export function normalizeDIR(rawDoc: unknown): any {
   const ALLOWED_META_KEYS = new Set([
     'sourceImageHash', 'sourceWidth', 'sourceHeight', 'analysisProvider',
     'analysisModel', 'analysisTimestamp', 'confidenceScore', 'schemaVersion',
-    'promptVersion', 'notes'
+    'promptVersion', 'notes', 'canvas_bounds'
   ]);
 
   if (doc.meta && typeof doc.meta === 'object' && !Array.isArray(doc.meta)) {

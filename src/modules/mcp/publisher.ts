@@ -89,10 +89,12 @@ export class MCPPublisher {
         const result = await this.client.callTool('wp_create_post', {
           title: req.title,
           status: req.publishMode || 'draft',
-          post_type: req.resourceType === 'template' ? 'elementor_library' : 'page',
+          post_type: 'page',
           meta_input: {
             _elementor_edit_mode: 'builder',
-            _elementor_template_type: req.resourceType === 'template' ? 'section' : 'wp-page',
+            _elementor_template_type: 'wp-page',
+            _wp_page_template: 'elementor_canvas',
+            _elementor_version: '3.24.7',
             _elementor_data: JSON.stringify(elements),
           },
         });
@@ -165,11 +167,7 @@ export class MCPPublisher {
     req: PublishRequest,
     elements: any[]
   ): Promise<{ id: number | string; url: string } | null> {
-    const baseSiteUrl = config.siteUrl.replace(/\/$/, '');
-    const isTemplate = req.resourceType === 'template';
-    const endpoint = isTemplate
-      ? `${baseSiteUrl}/wp-json/wp/v2/elementor_library`
-      : `${baseSiteUrl}/wp-json/wp/v2/pages`;
+    const endpoint = `${baseSiteUrl}/wp-json/wp/v2/pages`;
 
     const authHeader = `Basic ${Buffer.from(`${config.credentials.username}:${config.credentials.applicationPassword}`).toString('base64')}`;
 
@@ -184,7 +182,9 @@ export class MCPPublisher {
         status: req.publishMode || 'draft',
         meta: {
           _elementor_edit_mode: 'builder',
-          _elementor_template_type: isTemplate ? 'section' : 'wp-page',
+          _elementor_template_type: 'wp-page',
+          _wp_page_template: 'elementor_canvas',
+          _elementor_version: '3.24.7',
           _elementor_data: JSON.stringify(elements),
         },
       }),

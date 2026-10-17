@@ -35,7 +35,7 @@ import type {
 import { getRegistry } from './registry.js';
 
 export function generateElementId(): string {
-  return crypto.randomBytes(4).toString('hex');
+  return crypto.randomBytes(4).toString('hex').slice(0, 7);
 }
 
 export function isDarkColor(colorStr?: string): boolean {
@@ -100,6 +100,8 @@ export class ElementorGenerator {
 
     const document: ElementorDocument = {
       version: '0.4',
+      elementor_version: '3.24.7',
+      wp_version: '6.6.2',
       title: page?.name || 'Imported Design',
       type: 'page',
       page_settings: {
@@ -260,7 +262,7 @@ export class ElementorGenerator {
         } as DIRTextNode);
 
       case 'input':
-        return this.convertFallbackNode(node);
+        return this.convertInputNode(node);
 
       case 'unknown':
       default:
@@ -555,7 +557,9 @@ export class ElementorGenerator {
     if (node.styles?.height && typeof node.styles.height === 'number') {
       settings.height = { unit: 'px', size: node.styles.height };
     }
-    if ((node as any).objectFit) {
+    if ((node as any).composite_graphic_asset) {
+      settings.image_fit = 'contain';
+    } else if ((node as any).objectFit) {
       settings.image_fit = (node as any).objectFit;
     }
 
@@ -964,6 +968,33 @@ export class ElementorGenerator {
           elements: [],
         },
       ],
+    };
+  }
+
+  private convertInputNode(node: any): ElementorElement {
+    this.widgetCount++;
+    this.elementCount++;
+    this.widgetsUsed.add('html');
+
+    const formDetails = node.form_details;
+    const placeholder = formDetails?.placeholder || node.placeholder || 'Enter your email...';
+    const bg = formDetails?.background_hex || node.styles?.backgroundColor || 'rgba(255, 255, 255, 0.08)';
+    const color = node.styles?.color || '#ffffff';
+    const borderRadius = formDetails?.border_radius_px ?? (typeof node.styles?.borderRadius === 'number' ? node.styles.borderRadius : 50);
+    const fontSize = node.styles?.fontSize || 14;
+
+    const html = `<div class="elementor-custom-input-wrap" style="width: 100%;">
+  <input type="text" placeholder="${placeholder}" style="width: 100%; background: ${bg}; color: ${color}; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: ${borderRadius}px; padding: 12px 20px; font-size: ${fontSize}px; outline: none; box-sizing: border-box;" />
+</div>`;
+
+    return {
+      id: generateElementId(),
+      elType: 'widget',
+      widgetType: 'html',
+      settings: {
+        html,
+      },
+      elements: [],
     };
   }
 

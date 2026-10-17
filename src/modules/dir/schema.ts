@@ -102,6 +102,53 @@ const sectionRoles: DIRSectionRole[] = [
   'contact', 'form', 'footer', 'banner', 'logo-bar', 'generic'
 ];
 
+const dirCanvasBoundsSchema = z.object({
+  crop_mockup: z.boolean().optional(),
+  inner_bg_type: z.enum(['gradient', 'solid']).optional(),
+  primary_hex: z.string().optional(),
+  secondary_hex: z.string().optional(),
+  gradient_angle: z.number().optional(),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+}).strict();
+
+const dirTypographyDetailsSchema = z.object({
+  font_family_guess: z.string().optional(),
+  font_size_px: z.number().optional(),
+  font_weight: z.union([z.number(), z.string()]).optional(),
+  line_height_em: z.union([z.number(), z.string()]).optional(),
+  letter_spacing_px: z.number().optional(),
+  color_hex: z.string().optional(),
+  inline_color_spans: z.array(z.object({
+    text: z.string(),
+    color_hex: z.string(),
+  })).optional(),
+}).strict();
+
+const dirFormDetailsSchema = z.object({
+  fields: z.array(z.object({
+    placeholder: z.string().optional(),
+    type: z.string().optional(),
+    background_hex: z.string().optional(),
+    border_radius_px: z.number().optional(),
+  })).optional(),
+  placeholder: z.string().optional(),
+  background_hex: z.string().optional(),
+  border_radius_px: z.number().optional(),
+  field_gap_px: z.number().optional(),
+  submit_button: z.object({
+    text: z.string().optional(),
+    width_type: z.enum(['auto', 'full']).optional(),
+    gradient_hex: z.string().optional(),
+    background_hex: z.string().optional(),
+    color_hex: z.string().optional(),
+    border_radius_px: z.number().optional(),
+    icon_position: z.enum(['left', 'right', 'none']).optional(),
+  }).optional(),
+}).strict();
+
 const baseNodeFields = {
   id: z.string().min(1),
   kind: z.enum(nodeKinds as [string, ...string[]]),
@@ -112,6 +159,10 @@ const baseNodeFields = {
     z.enum(['tablet', 'mobile']),
     dirStyles.partial()
   ).optional(),
+  typography: dirTypographyDetailsSchema.optional(),
+  form_details: dirFormDetailsSchema.optional(),
+  composite_graphic_asset: z.boolean().optional(),
+  layout_tree: z.record(z.any()).optional(),
 };
 
 // Lazy recursive node schema
@@ -351,6 +402,7 @@ const dirAssetSchema = z.object({
   seed: z.number().int().optional(),
   prompt: z.string().optional(),
   generated: z.boolean().optional(),
+  composite_graphic_asset: z.boolean().optional(),
   metadata: z.record(z.any()).optional(),
 }).strict();
 
@@ -368,6 +420,7 @@ const dirSectionSchema = z.object({
     z.enum(['tablet', 'mobile']),
     dirStyles.partial()
   ).optional(),
+  canvas_bounds: dirCanvasBoundsSchema.optional(),
 }).strict();
 
 // ─── Page Schema ─────────────────────────────────────────────────────
@@ -376,6 +429,7 @@ const dirPageSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
   sections: z.array(dirSectionSchema).min(1),
+  canvas_bounds: dirCanvasBoundsSchema.optional(),
 }).strict();
 
 // ─── Full DIR Document Schema ────────────────────────────────────────
@@ -393,6 +447,7 @@ export const dirDocumentSchema = z.object({
     schemaVersion: z.literal('1.0.0'),
     promptVersion: z.string(),
     notes: z.array(z.string()).optional(),
+    canvas_bounds: dirCanvasBoundsSchema.optional(),
   }).strict(),
   breakpoints: z.object({
     desktop: z.object({ min: z.number(), max: z.number().optional() }),
@@ -426,6 +481,7 @@ export const dirDocumentSchema = z.object({
   }).strict(),
   assets: z.array(dirAssetSchema),
   pages: z.array(dirPageSchema).min(1),
+  canvas_bounds: dirCanvasBoundsSchema.optional(),
 }).strict();
 
 // ─── Validation Functions ────────────────────────────────────────────

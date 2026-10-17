@@ -9,8 +9,9 @@
 import { loadRootSkillInstructions } from '../elementor/serializer.js';
 
 export const PROMPT_VERSIONS = {
-  IMAGE_ANALYSIS: 'v1.6.0',
-  ELEMENTOR_CONVERSION: 'v1.2.0',
+  IMAGE_ANALYSIS: 'v2.0.0',
+  ELEMENTOR_CONVERSION: 'v2.0.0',
+  ELEMENTOR_SELF_HEALING: 'v1.0.0',
   DIR_REPAIR: 'v1.1.0',
   SECTION_REPAIR: 'v1.0.0',
 } as const;
@@ -65,6 +66,19 @@ Prompt Version: ${version}
 Your task is to analyze the provided webpage screenshot and generate a Design Intermediate Representation (DIR) JSON document.
 Output MUST be strict, valid JSON with NO commentary, NO markdown fences, and NO conversational text.
 
+1. CANVAS ISOLATION RULE (MANDATORY):
+- Uploaded design images often contain an outer presentation background (e.g. solid pastel blue/grey, desk wallpaper), a device frame (laptop bezel, browser window mockup with fake tabs/dots, tablet frame), or drop shadows around a card.
+- YOU MUST TOTALLY IGNORE THE OUTER PRESENTATION FRAME AND MOCKUP BACKGROUND!
+- The inner webpage bounding box MUST be treated as the root canvas (100% width).
+- In the root document and in every section, you MUST populate "canvas_bounds":
+  {
+    "crop_mockup": true,
+    "inner_bg_type": "gradient" | "solid",
+    "primary_hex": "<hex>",
+    "secondary_hex": "<hex>",
+    "gradient_angle": <number_degrees>
+  }
+
 STAGE A (PERCEPTION) vs STAGE B (CANONICAL DIR):
 - STAGE A: Distinguish directly observed visual facts (exact colors, visible text, layout flow, button labels, asset bounding boxes) from inferred responsive behavior.
 - STAGE B: Assemble these observations into a strict DIRDocument v1.0.0.
@@ -77,6 +91,13 @@ STAGE A (PERCEPTION) vs STAGE B (CANONICAL DIR):
 DIR SCHEMA REQUIREMENTS:
 1. Root object must contain:
    - "version": "1.0.0"
+   - "canvas_bounds": {
+       "crop_mockup": true,
+       "inner_bg_type": "gradient" | "solid",
+       "primary_hex": "<hex>",
+       "secondary_hex": "<hex>",
+       "gradient_angle": <number>
+     }
    - "meta": {
        "sourceImageHash": "${imageInfo.sha256}",
        "sourceWidth": ${imageInfo.width},
@@ -124,6 +145,7 @@ DIR SCHEMA REQUIREMENTS:
          "type": "image" | "icon" | "logo" | "background" | "placeholder",
          "role": "<short-description>",
          "confidence": <0.0-1.0>,
+         "composite_graphic_asset": <boolean>,
          "sourceRect": { "x": <number>, "y": <number>, "width": <number>, "height": <number> }
        }
      ]
@@ -137,6 +159,13 @@ DIR SCHEMA REQUIREMENTS:
              "role": "<supported_section_role>",
              "label": "<descriptive-name>",
              "confidence": <0.0-1.0>,
+             "canvas_bounds": {
+               "crop_mockup": true,
+               "inner_bg_type": "gradient" | "solid",
+               "primary_hex": "<hex>",
+               "secondary_hex": "<hex>",
+               "gradient_angle": <number>
+             },
              "styles": {
                "backgroundColor": "<hex/rgba>",
                "padding": { "top": <number>, "bottom": <number>, "left": <number>, "right": <number> }
@@ -151,6 +180,44 @@ CRITICAL HIERARCHY RULES:
 - "pages" is an array of Page objects: [{ "id": "page_main", "name": "Home", "sections": [...] }].
 - Sections MUST be placed inside "pages[0].sections", NEVER directly in "pages"!
 - Do not place section objects { "role", "styles", "children" } directly into "pages[]".
+
+STRICT DIR SCHEMA SPECIFICATIONS FOR ACCURACY:
+- "layout_tree": For containers and flex groups, provide:
+  {
+    "direction": "row" | "column",
+    "justify_content": "flex-start" | "center" | "space-between" | "flex-end",
+    "align_items": "flex-start" | "center" | "stretch" | "flex-end",
+    "gap_px": <number>,
+    "padding_px": <number>,
+    "width_pct": <number 0-100>
+  }
+- "typography": Explicit visual typography breakdown for all text, headings, and buttons:
+  {
+    "font_family_guess": "<Poppins|Montserrat|Inter|Roboto|sans-serif>",
+    "font_size_px": <number>,
+    "font_weight": <number 300-900>,
+    "line_height_em": <number e.g. 1.2 or 1.5>,
+    "letter_spacing_px": <number>,
+    "color_hex": "<hex>",
+    "inline_color_spans": [
+      { "text": "<span text>", "color_hex": "<hex>" }
+    ]
+  }
+- "form_details": For form containers and input fields (e.g. search bars, newsletter subscribe, contact inputs):
+  {
+    "placeholder": "<placeholder text, e.g. 'Enter your email'>",
+    "background_hex": "<hex color>",
+    "border_radius_px": <number e.g. 50 for pill>,
+    "field_gap_px": <number>,
+    "submit_button": {
+      "text": "<button text>",
+      "width_type": "auto" | "full",
+      "gradient_hex": "<hex color>",
+      "icon_position": "left" | "right" | "none"
+    }
+  }
+- "complex_media_detection": If an image/graphic features an organic SVG blob mask, overlapping vector lines, floating organic illustrations, or complex layered decorations, DO NOT attempt to fake it with CSS border-radius alone. Mark the asset and node with:
+  "composite_graphic_asset": true
 
 CRITICAL STYLES & NUMERIC RULES:
 - All dimensions, spacing, and typography numbers in "styles" (fontSize, lineHeight, letterSpacing, borderWidth, gap, opacity, zIndex) MUST be bare numbers (e.g. 16, 24, 1.2), NEVER strings like "16px" or "24".
@@ -177,6 +244,7 @@ CRITICAL VISUAL FIDELITY & LAYOUT ACCURACY:
 - HEADLINE HIERARCHY & TEXT CONTRAST: Preserve the primary headline (e.g. "Simplify your financial\\nManagement") as an H1 heading with appropriate font size (e.g. 48-64), center or left alignment matching the design, and high-contrast color (e.g. #ffffff against dark backgrounds). Ensure all white/light text has explicit high-contrast color styles.
 - HERO GRAPHICS & PHOTOGRAPHY: If the hero area features an illustration, 3D artwork, athletic photograph, model, gym equipment, or product screenshot, define an asset in the root "assets" array with "sourceRect": { "x": <number>, "y": <number>, "width": <number>, "height": <number> } indicating its bounding box in the original image, and insert an 'image' node referencing this asset via "assetId".
 - CIRCULAR STATISTICS & METRIC BADGES: For metrics and statistics (e.g. "+70% Fitness Progress", "500+ Members", circular stat cards), structure them as a 'container' or 'flex-group' with "direction": "column", centered alignment, and children consisting of a 'counter' node ("value": <number>, "suffix": "<string>", "prefix": "<string>", "styles": { "color": "<hex>", "fontSize": <number>, "fontWeight": 700 }) and a 'text' node for the label. If the visual badge is circular, specify "borderRadius": 9999 and matching numeric "width" and "height" in "styles".
+- HIGH-IMPACT CTA BUTTONS: Prominent action buttons (e.g. orange #ff5e14 or vibrant accents) must have explicit "backgroundColor", contrasting text "color" (#ffffff), padding, and "borderRadius".
 - HIGH-IMPACT CTA BUTTONS: Prominent action buttons (e.g. orange #ff5e14 or vibrant accents) must have explicit "backgroundColor", contrasting text "color" (#ffffff), padding, and "borderRadius".
 
 SUPPORTED SECTION ROLES:
@@ -227,64 +295,62 @@ export function getElementorConversionPrompt(
     ? JSON.stringify(widgetProfiles, null, 2)
     : 'Common Elementor widgets: container (flexbox/grid layout), heading, text-editor, button, image, icon, icon-box, divider, spacer';
 
-  const systemPrompt = `You are a specialized Elementor Layout Engine compiler.
+  const systemPrompt = `You are a specialized Elementor Layout Engine compiler (Stage C - Structure Engine).
 Prompt Version: ${version}
 
 OPERATIVE SKILL INSTRUCTIONS (server/ELEMENTOR_SKILL.md):
 ${operativeSkill || ''}
 
-Your task is to convert a Design Intermediate Representation (DIR) document into a native Elementor template JSON structure.
+Your task is to convert a Design Intermediate Representation (DIR) document into a native Elementor template JSON structure with 100% visual fidelity.
 
-ELEMENTOR JSON SPECIFICATION:
-1. Root Envelope:
+CRITICAL ARCHITECTURE RULES:
+1. STRICT MODERN CONTAINER ARCHITECTURE (NO SECTIONS/COLUMNS):
+   - Legacy "section" and "column" elements are STRICTLY FORBIDDEN!
+   - Every layout structure MUST use modern Elementor Flexbox Containers ("elType": "container").
+   - Root sections MUST map to root containers: { "id": "<7-char-hex>", "elType": "container", "isInner": false, ... }
+   - Nested groups MUST map to inner containers: { "id": "<7-char-hex>", "elType": "container", "isInner": true, ... }
+
+2. 7-CHARACTER UNIQUE IDS:
+   - EVERY element (container and widget) MUST have a UNIQUE, exactly 7-character hexadecimal/alphanumeric ID (e.g. "a1b2c3d", "e4f5a6b").
+   - NEVER reuse IDs across elements. Do not use 8-character or non-7-character IDs.
+
+3. DIRECT HEX COLORS (DISABLE THEME GLOBALS):
+   - All colors (text, background, border, buttons, icons) MUST be direct hexadecimal strings (e.g. "title_color": "#ffffff", "background_color": "#0d1117").
+   - DO NOT emit "__globals__" references (e.g. globals/colors?id=primary). Direct hex values guarantee the layout looks identical regardless of active WordPress theme styles.
+
+4. 1:1 SETTINGS MAPPING:
+   - Map "width_pct" -> "width": { "unit": "%", "size": <width_pct> }
+   - Map "padding_px" -> "padding": { "unit": "px", "top": "<px>", "right": "<px>", "bottom": "<px>", "left": "<px>", "isLinked": false }
+   - Map "gap_px" -> "flex_gap": { "unit": "px", "size": <gap_px> }
+   - Map "border_radius_px" -> "border_radius": { "unit": "px", "top": "<px>", "right": "<px>", "bottom": "<px>", "left": "<px>", "isLinked": true }
+
+5. ROOT ENVELOPE:
    {
-     "version": "0.4",
-     "title": "Imported Template",
+     "version": "3.24.7",
+     "elementor_version": "3.24.7",
+     "title": "Imported Page",
      "type": "page",
+     "page_settings": {
+       "template": "elementor_canvas",
+       "background_background": "classic",
+       "background_color": "<page_bg_hex>"
+     },
      "content": [ <Root Container Elements> ]
    }
 
-2. Container-Based Architecture (Elementor Flexbox Containers):
-   - Every section from the DIR must map to a root container:
-     {
-       "id": "<7-character-alphanumeric-id>",
-       "elType": "container",
-       "isInner": false,
-       "settings": {
-         "content_width": "boxed" | "full",
-         "flex_direction": "column" | "row",
-         "flex_gap": { "unit": "px", "size": <number> },
-         "background_background": "classic",
-         "background_color": "<hex-color>",
-         "padding": { "unit": "px", "top": "<px>", "right": "<px>", "bottom": "<px>", "left": "<px>", "isLinked": false }
-       },
-       "elements": [ <Child Widgets or Inner Containers> ]
-     }
-   - Nested layouts should use inner containers ("isInner": true, "elType": "container").
-
-3. Widget Mapping Rules:
-   - DIR heading -> widgetType: "heading", settings: { "title": "<text>", "header_size": "h1"|"h2"|"h3", "align": "left"|"center" }
-   - DIR text -> widgetType: "text-editor", settings: { "editor": "<html-string>" }
-   - DIR button -> widgetType: "button", settings: { "text": "<button-text>", "link": { "url": "#" }, "button_type": "default" }
-   - DIR image -> widgetType: "image", settings: { "image": { "url": "https://placehold.co/600x400" }, "image_size": "large" }
-   - DIR divider -> widgetType: "divider", settings: { "weight": { "unit": "px", "size": 1 } }
+6. WIDGET MAPPING RULES:
+   - DIR heading -> widgetType: "heading", settings: { "title": "<text>", "header_size": "h1"|"h2"|"h3", "align": "left"|"center", "title_color": "<hex>" }
+   - DIR text -> widgetType: "text-editor", settings: { "editor": "<html-string>", "text_color": "<hex>" }
+   - DIR button -> widgetType: "button", settings: { "text": "<button-text>", "link": { "url": "#" }, "background_color": "<hex>", "button_text_color": "<hex>" }
+   - DIR image -> widgetType: "image", settings: { "image": { "url": "<url>" }, "image_size": "full" }
+   - DIR divider -> widgetType: "divider", settings: { "weight": { "unit": "px", "size": 1 }, "color": "<hex>" }
    - DIR spacer -> widgetType: "spacer", settings: { "space": { "unit": "px", "size": <height> } }
-   - DIR icon -> widgetType: "icon", settings: { "selected_icon": { "value": "fas fa-star", "library": "fa-solid" } }
+   - DIR icon -> widgetType: "icon", settings: { "selected_icon": { "value": "fas fa-star", "library": "fa-solid" }, "primary_color": "<hex>" }
    - DIR icon-text -> widgetType: "icon-box", settings: { "title_text": "<title>", "description_text": "<text>" }
+   - DIR counter -> widgetType: "counter", settings: { "starting_number": 0, "ending_number": <num>, "number_color": "<hex>" }
+   - DIR form / input -> Use styled HTML or inner container with styled inputs matching "form_details" (50px pill radius, placeholder, background).
 
-4. Responsive Controls & Suffixes (Elementor 4.3.5):
-   - Elementor uses unadorned controls for desktop, with "_tablet" and "_mobile" suffixes:
-     - Flex direction: "flex_direction", "flex_direction_tablet": "column", "flex_direction_mobile": "column"
-     - Grid columns: "grid_columns_grid", "grid_columns_grid_tablet": { "unit": "fr", "size": 2 }, "grid_columns_grid_mobile": { "unit": "fr", "size": 1 }
-     - Font size: "typography_font_size", "typography_font_size_tablet", "typography_font_size_mobile"
-     - Spacing: "padding_tablet", "padding_mobile", "margin_tablet", "margin_mobile"
-     - Viewport clamping: Ensure containers and images have "width_mobile": { "unit": "%", "size": 100 } where fixed desktop widths would exceed 390px mobile viewport.
-
-5. Element ID Requirements:
-   - EVERY element (container and widget) MUST have a UNIQUE, 7-character hexadecimal or alphanumeric ID (e.g. "a1b2c3d", "e4f5a6b").
-   - NEVER reuse IDs across elements.
-
-6. Widget Profiles Context:
+7. WIDGET PROFILES CONTEXT:
 ${relevantWidgets}
 
 Output ONLY valid JSON representing the Elementor template document. No Markdown fences, no explanations.`;
@@ -292,6 +358,52 @@ Output ONLY valid JSON representing the Elementor template document. No Markdown
   const userPrompt = `Convert the following validated DIR document into native Elementor JSON format:
 
 ${JSON.stringify(dirJson, null, 2)}`;
+
+  return { systemPrompt, userPrompt, version };
+}
+
+/**
+ * Returns the prompt for Stage D: Validation & Self-Healing Gate.
+ * Compares Stage B DIR and Stage C Elementor AST, patches any missing widgets,
+ * repairs invalid schema nodes, and guarantees deployable Elementor JSON.
+ */
+export function getElementorSelfHealingGatePrompt(
+  dirJson: unknown,
+  astJson: unknown,
+  validationErrors?: Array<{ path: string; message: string }>
+): PromptPayload {
+  const version = PROMPT_VERSIONS.ELEMENTOR_SELF_HEALING;
+
+  const systemPrompt = `You are the specialized Elementor Validation & Self-Healing Gate (Stage D).
+Prompt Version: ${version}
+
+Your task is to compare the Stage B DIR (Design Intermediate Representation) specification with the Stage C Elementor AST JSON structure, audit for missing widgets or invalid settings, and return the final healed, 100% visual fidelity Elementor JSON document.
+
+AUDIT & SELF-HEALING RULES:
+1. MISSING WIDGET RESTORATION:
+   - Audit the AST against DIR nodes. If any widget is missing (e.g. search icon, newsletter input field, submit button, bottom URL/credits, announcement badge, counter, or logo image), IMMEDIATELY synthesize and inject the missing widget node.
+   - Every injected widget must have full typography, direct hex colors, and spacing matching the DIR.
+2. STRICT CONTAINER ARCHITECTURE:
+   - Verify that NO legacy "section" or "column" elements exist. Replace any legacy elements with "container" ("elType": "container").
+3. 7-CHARACTER UNIQUE IDS:
+   - Every element MUST have a unique, exactly 7-character hexadecimal ID (e.g. "a1b2c3d"). Fix any IDs that are too short, too long, or duplicated.
+4. DIRECT HEX COLOR ENFORCEMENT:
+   - Strip any "__globals__" styling dictionaries and ensure direct hex colors are applied so WordPress theme styles do not override the design.
+5. ROOT ENVELOPE:
+   - Ensure the root object has "version": "3.24.7", "elementor_version": "3.24.7", "type": "page", and "page_settings": { "template": "elementor_canvas" }.
+
+Output strictly valid JSON only. No markdown fences, no commentary.`;
+
+  const userPrompt = `Audit and heal the following Elementor AST against the source DIR document:
+
+SOURCE DIR SPECIFICATION:
+${JSON.stringify(dirJson, null, 2)}
+
+STAGE C ELEMENTOR AST:
+${JSON.stringify(astJson, null, 2)}
+${validationErrors && validationErrors.length > 0 ? `\nVALIDATION ISSUES DETECTED:\n${JSON.stringify(validationErrors, null, 2)}` : ''}
+
+Return the complete healed Elementor template JSON ready for WordPress deployment.`;
 
   return { systemPrompt, userPrompt, version };
 }

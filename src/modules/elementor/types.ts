@@ -30,6 +30,8 @@ export interface ElementorElement {
 
 export interface ElementorDocument {
   version: string; // Typically '0.4'
+  elementor_version?: string; // Explicit plugin version e.g. '3.24.7'
+  wp_version?: string; // e.g. '6.6.2'
   title: string;
   type: 'page' | 'post' | 'header' | 'footer' | 'popup' | 'section' | 'single' | 'archive' | string;
   page_settings?: Record<string, any>;
