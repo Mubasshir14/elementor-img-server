@@ -9,7 +9,7 @@
 import { loadRootSkillInstructions } from '../elementor/serializer.js';
 
 export const PROMPT_VERSIONS = {
-  IMAGE_ANALYSIS: 'v2.0.0',
+  IMAGE_ANALYSIS: 'v2.1.0',
   ELEMENTOR_CONVERSION: 'v2.0.0',
   ELEMENTOR_SELF_HEALING: 'v1.0.0',
   DIR_REPAIR: 'v1.1.0',
@@ -235,17 +235,35 @@ CRITICAL ASSET & BOUNDING BOX RULES:
 - Never provide coordinates outside the image frame.
 
 CRITICAL VISUAL FIDELITY & LAYOUT ACCURACY:
-- CANVAS & SECTION BACKGROUNDS: Faithfully capture dark themes! If the page background is dark or near-black (e.g. #050a04, #0a0f0d, #111827), you MUST specify this exact color in "globals.colors.background" and the hero section "styles.backgroundColor". NEVER omit the background or leave it transparent/white for dark designs.
+- CANVAS & SECTION BACKGROUNDS: Faithfully capture page backgrounds! If dark, specify in "globals.colors.background" and hero "styles.backgroundColor". If light/cream (e.g. #FAF7F2, #FFFDF9), set background color accordingly. Never leave hero background transparent.
 - HEADER & NAVIGATION BAR: Structure the header horizontally ("direction": "row", "justifyContent": "space-between", "alignItems": "center") containing:
-  1. Logo / brand mark (e.g. text heading or logo image).
-  2. Navigation menu links: group links together in a container/flex-group (e.g. "Home", "Features", "Pricing", "About").
-  3. Action CTA button (e.g. "Get Started").
-- ANNOUNCEMENT BADGES & PILLS: Hero notification badges (e.g. "A trusted modern fintech platform") should be structured as a 'badge' node with "text", or a 'container' with full pill border radius (9999), light accent background color (e.g. #b7f34c), and dark contrasting text (#060b05).
-- HEADLINE HIERARCHY & TEXT CONTRAST: Preserve the primary headline (e.g. "Simplify your financial\\nManagement") as an H1 heading with appropriate font size (e.g. 48-64), center or left alignment matching the design, and high-contrast color (e.g. #ffffff against dark backgrounds). Ensure all white/light text has explicit high-contrast color styles.
-- HERO GRAPHICS & PHOTOGRAPHY: If the hero area features an illustration, 3D artwork, athletic photograph, model, gym equipment, or product screenshot, define an asset in the root "assets" array with "sourceRect": { "x": <number>, "y": <number>, "width": <number>, "height": <number> } indicating its bounding box in the original image, and insert an 'image' node referencing this asset via "assetId".
-- CIRCULAR STATISTICS & METRIC BADGES: For metrics and statistics (e.g. "+70% Fitness Progress", "500+ Members", circular stat cards), structure them as a 'container' or 'flex-group' with "direction": "column", centered alignment, and children consisting of a 'counter' node ("value": <number>, "suffix": "<string>", "prefix": "<string>", "styles": { "color": "<hex>", "fontSize": <number>, "fontWeight": 700 }) and a 'text' node for the label. If the visual badge is circular, specify "borderRadius": 9999 and matching numeric "width" and "height" in "styles".
-- HIGH-IMPACT CTA BUTTONS: Prominent action buttons (e.g. orange #ff5e14 or vibrant accents) must have explicit "backgroundColor", contrasting text "color" (#ffffff), padding, and "borderRadius".
-- HIGH-IMPACT CTA BUTTONS: Prominent action buttons (e.g. orange #ff5e14 or vibrant accents) must have explicit "backgroundColor", contrasting text "color" (#ffffff), padding, and "borderRadius".
+  1. Brand Logo: If the logo consists of an icon/mark or distinct SVG/bitmap graphic (e.g. BrainGig, StrongBody), define an asset with exact "sourceRect" in root "assets" and reference it via an 'image' node (or text heading if pure typography).
+  2. Navigation Menu Links: Group links together in a container/flex-group with "direction": "row", "gap": 24-32.
+  3. Header CTA Button: Distinct action button (e.g. "Start a project ->", "Join Now").
+- 2-COLUMN HERO SPLIT (CONTENT VS VISUAL):
+  When a design features copy/headline/CTA/metrics on one side and a person, photo, or 3D graphic on the other side, YOU MUST structure the hero content as a 2-column horizontal container ("direction": "row", "justifyContent": "space-between", "alignItems": "center"):
+  - Left Container (Content, width ~50-60%): Contains the eyebrow badge/tagline, headline (H1), body text, CTA button group, and statistics metrics.
+  - Right Container (Visual, width ~40-50%): Contains the 'image' node referencing the hero photo asset.
+  NEVER stack the hero image underneath all headline and body text when the design visually places them side-by-side!
+  NOTE: If the design is a centered, single-column hero (e.g. centered headline, subtitle, search/input, or full-width banner), maintain a centered single-column container ("direction": "column", "alignItems": "center"). DO NOT force a 2-column split without visual evidence.
+- SIDE-BY-SIDE BUTTON PAIRS (PRIMARY + SECONDARY):
+  When there are two action buttons (e.g. "Start Your Project" + "Explore Our Work", or "Haven't you started yet? Start Now"):
+  Group them inside a horizontal container ("direction": "row", "alignItems": "center", "gap": 16-20). Do not stack buttons vertically unless the uploaded design is explicitly vertical.
+- HERO GRAPHICS & PHOTOGRAPHY CROPPING:
+  For any athletic photograph, model, artwork, 3D shape, avatar cluster, or client review badge, define an asset in the root "assets" array with EXACT pixel bounding box:
+  "sourceRect": { "x": <number>, "y": <number>, "width": <number>, "height": <number> }
+  Coordinates must be strictly accurate so the cropping engine can extract the real artwork instead of generating a dummy blank rectangle.
+- STATISTICS & METRICS ROW:
+  When numbers are arranged in columns or a horizontal bar (e.g. "120+ Projects", "15+ Countries", "4.9/5 Rating", "95% Returning", or circular stats "10k", "20", "500"):
+  Structure them as a container with "direction": "row", "justifyContent": "space-between" or "gap": 24-32.
+  When statistics are circular badges (e.g. orange circles with bold white numbers and text label underneath):
+  Each stat item MUST be a vertical container ("direction": "column", "alignItems": "center", "gap": 12-16) containing:
+  1. A 'counter' node with "value" (number), "suffix" (e.g. 'k'), and "styles" specifying "borderRadius": 9999, "backgroundColor": "<hex>", "color": "#ffffff", "fontSize": 32-40, "fontWeight": 800.
+  2. A 'text' or 'heading' node for the descriptive label (e.g. "Happy Clients").
+- DECORATIVE BADGES, CAPSULES & ACCENT STRIPS:
+  Do not omit secondary decorative shapes (e.g. floating orange capsules with dotted patterns, gradient bottom strips, or arched photo frames). Register them in the root "assets" array with exact "sourceRect" and place them as 'image' nodes or styled containers in the section layout.
+- HIGH-IMPACT CTA BUTTONS:
+  Buttons must preserve exact visual styles: dark navy/black background (#0B192C) with white text, or vibrant orange/lime accent (#ff5e14, #22c55e), appropriate "borderRadius" (e.g. 50 or 9999 for pill buttons, 8 for rounded rect), and padding. For outline buttons (e.g. transparent with colored border), set "variant": "outline", "styles.backgroundColor": "transparent", "styles.borderColor": "<hex>", "styles.borderWidth": 1.
 
 SUPPORTED SECTION ROLES:
 ${supportedSectionRoles}
@@ -326,8 +344,8 @@ CRITICAL ARCHITECTURE RULES:
 
 5. ROOT ENVELOPE:
    {
-     "version": "3.24.7",
-     "elementor_version": "3.24.7",
+     "version": "0.4",
+     "elementor_version": "4.3.5",
      "title": "Imported Page",
      "type": "page",
      "page_settings": {
@@ -390,7 +408,7 @@ AUDIT & SELF-HEALING RULES:
 4. DIRECT HEX COLOR ENFORCEMENT:
    - Strip any "__globals__" styling dictionaries and ensure direct hex colors are applied so WordPress theme styles do not override the design.
 5. ROOT ENVELOPE:
-   - Ensure the root object has "version": "3.24.7", "elementor_version": "3.24.7", "type": "page", and "page_settings": { "template": "elementor_canvas" }.
+   - Ensure the root object has "version": "0.4", "elementor_version": "4.3.5", "type": "page", and "page_settings": { "template": "elementor_canvas" }.
 
 Output strictly valid JSON only. No markdown fences, no commentary.`;
 

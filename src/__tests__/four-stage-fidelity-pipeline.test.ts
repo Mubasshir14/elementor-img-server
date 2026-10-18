@@ -215,7 +215,9 @@ describe('Four-Stage Fidelity Pipeline & Boss Feedback Specifications', () => {
         breakpoints: { desktop: { min: 1024 } },
         globals: {
           colors: { background: '#111827', text: '#ffffff', primary: '#3b82f6' },
+          typography: { fontFamilies: ['Inter'], headingFont: 'Inter', bodyFont: 'Inter', baseSize: 16, scale: 1.2 },
         },
+        assets: [],
         pages: [
           {
             id: 'page_main',
@@ -266,7 +268,11 @@ describe('Four-Stage Fidelity Pipeline & Boss Feedback Specifications', () => {
           notes: [],
         },
         breakpoints: { desktop: { min: 1024 } },
-        globals: { colors: { background: '#000000', text: '#ffffff' } },
+        globals: {
+          colors: { background: '#000000', text: '#ffffff' },
+          typography: { fontFamilies: ['Inter'], headingFont: 'Inter', bodyFont: 'Inter', baseSize: 16, scale: 1.2 },
+        },
+        assets: [],
         pages: [
           {
             id: 'page_main',
@@ -325,7 +331,10 @@ describe('Four-Stage Fidelity Pipeline & Boss Feedback Specifications', () => {
           notes: [],
         },
         breakpoints: { desktop: { min: 1024 } },
-        globals: {},
+        globals: {
+          colors: { background: '#ffffff', text: '#000000' },
+          typography: { fontFamilies: ['Inter'], headingFont: 'Inter', bodyFont: 'Inter', baseSize: 16, scale: 1.2 },
+        },
         assets: [
           {
             id: 'blob_art',
@@ -453,4 +462,27 @@ describe('Four-Stage Fidelity Pipeline & Boss Feedback Specifications', () => {
       expect(prompt.userPrompt).toContain('Missing bottom credits widget');
     });
   });
+
+  describe('Prohibited Custom Code Shortcuts Detection', () => {
+    it('should flag a warning when a whole section or header/footer is substituted with an HTML block', () => {
+      const docWithFakeHtmlSection = {
+        version: '0.4',
+        content: [
+          {
+            id: 'sec0001',
+            elType: 'widget',
+            widgetType: 'html',
+            settings: {
+              html: '<section class="my-hero"><h1>Fake Heading</h1><nav><a href="#">Link</a></nav></section>',
+            },
+            elements: [],
+          },
+        ],
+      };
+
+      const result = validateElementor(docWithFakeHtmlSection);
+      expect(result.warnings.some((w) => w.code === 'PROHIBITED_CUSTOM_CODE_SHORTCUT')).toBe(true);
+    });
+  });
 });
+

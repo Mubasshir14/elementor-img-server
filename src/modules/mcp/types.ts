@@ -84,6 +84,8 @@ export interface PublishRequest {
   slug?: string;
   templateType?: 'page' | 'section' | 'header' | 'footer' | 'container' | string;
   pageSettings?: Record<string, unknown>;
+  elementorVersion?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface PublishResult {

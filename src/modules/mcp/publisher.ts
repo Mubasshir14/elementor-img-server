@@ -4,6 +4,8 @@
  * with idempotency, verification read-backs, and safe draft modes.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import type {
   PublishRequest,
   PublishResult,
@@ -11,6 +13,7 @@ import type {
 } from './types.js';
 import { MCPClient } from './client.js';
 import { logger } from '../../lib/logger.js';
+import { getAuthoritativeElementorVersion } from '../elementor/serializer.js';
 
 export class MCPPublisher {
   private client: MCPClient;
@@ -40,6 +43,9 @@ export class MCPPublisher {
       const elements = Array.isArray((req.elementorJson as any)?.content)
         ? (req.elementorJson as any).content
         : [];
+
+      // Resolve and upload local storage assets to WordPress Media Library before publishing
+      await this.resolveAndUploadAssets(elements, this.client.getConfig());
 
       const baseSiteUrl = (this.client.getSiteUrl() || 'http://localhost').replace(/\/$/, '');
       let remoteId: string | number = 101;
@@ -94,7 +100,7 @@ export class MCPPublisher {
             _elementor_edit_mode: 'builder',
             _elementor_template_type: 'wp-page',
             _wp_page_template: 'elementor_canvas',
-            _elementor_version: '3.24.7',
+            _elementor_version: req.elementorVersion || (req.metadata as any)?.elementor_version || getAuthoritativeElementorVersion().elementorVersion,
             _elementor_data: JSON.stringify(elements),
           },
         });
@@ -167,6 +173,8 @@ export class MCPPublisher {
     req: PublishRequest,
     elements: any[]
   ): Promise<{ id: number | string; url: string } | null> {
+    const baseSiteUrl = config.siteUrl.replace(/\/$/, '');
+    const isTemplate = req.resourceType === 'template';
     const endpoint = `${baseSiteUrl}/wp-json/wp/v2/pages`;
 
     const authHeader = `Basic ${Buffer.from(`${config.credentials.username}:${config.credentials.applicationPassword}`).toString('base64')}`;
@@ -184,7 +192,7 @@ export class MCPPublisher {
           _elementor_edit_mode: 'builder',
           _elementor_template_type: 'wp-page',
           _wp_page_template: 'elementor_canvas',
-          _elementor_version: '3.24.7',
+          _elementor_version: req.elementorVersion || (req.metadata as any)?.elementor_version || getAuthoritativeElementorVersion().elementorVersion,
           _elementor_data: JSON.stringify(elements),
         },
       }),
@@ -226,6 +234,117 @@ export class MCPPublisher {
     }
 
     return null;
+  }
+
+  private findStorageFile(storageUrl: string): string | null {
+    const cleanKey = storageUrl.replace(/^\/?storage\//, '');
+    const candidates = [
+      path.resolve(process.cwd(), 'storage/uploads', cleanKey),
+      path.resolve(process.cwd(), 'server/storage/uploads', cleanKey),
+      path.resolve(process.cwd(), '../server/storage/uploads', cleanKey),
+      path.resolve(process.cwd(), 'storage', cleanKey),
+      path.resolve(process.cwd(), 'server/storage', cleanKey),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c;
+    }
+    return null;
+  }
+
+  private async resolveAndUploadAssets(
+    elements: any[],
+    config: MCPConnectionConfig
+  ): Promise<void> {
+    const uploadedCache = new Map<string, { id: number | string; url: string }>();
+    const baseSiteUrl = (config.siteUrl || 'http://localhost').replace(/\/$/, '');
+    const hasAuth = !!(config.credentials?.username && config.credentials?.applicationPassword);
+    const authHeader = hasAuth
+      ? `Basic ${Buffer.from(`${config.credentials.username}:${config.credentials.applicationPassword}`).toString('base64')}`
+      : null;
+
+    const processElement = async (el: any): Promise<void> => {
+      if (!el || typeof el !== 'object') return;
+
+      const handleImageUrl = async (imgObj: any) => {
+        if (!imgObj || typeof imgObj !== 'object') return;
+        const rawUrl = imgObj.url;
+        if (!rawUrl || typeof rawUrl !== 'string') return;
+
+        // If it's already a full http/https url that is NOT localhost mock, skip
+        if (rawUrl.startsWith('http') && !rawUrl.includes('mock.elementor.local') && !rawUrl.includes('/storage/')) {
+          return;
+        }
+
+        if (uploadedCache.has(rawUrl)) {
+          const cached = uploadedCache.get(rawUrl)!;
+          imgObj.url = cached.url;
+          if (cached.id) imgObj.id = cached.id;
+          return;
+        }
+
+        const localPath = this.findStorageFile(rawUrl);
+        if (localPath && hasAuth) {
+          try {
+            const fileBuf = fs.readFileSync(localPath);
+            const fileName = path.basename(localPath);
+            const mimeType = fileName.endsWith('.jpg') || fileName.endsWith('.jpeg')
+              ? 'image/jpeg'
+              : fileName.endsWith('.svg')
+              ? 'image/svg+xml'
+              : 'image/png';
+
+            const res = await fetch(`${baseSiteUrl}/wp-json/wp/v2/media`, {
+              method: 'POST',
+              headers: {
+                Authorization: authHeader!,
+                'Content-Type': mimeType,
+                'Content-Disposition': `attachment; filename="${fileName}"`,
+              },
+              body: fileBuf,
+            });
+
+            if (res.ok) {
+              const data = (await res.json()) as any;
+              uploadedCache.set(rawUrl, { id: data.id, url: data.source_url });
+              imgObj.url = data.source_url;
+              imgObj.id = data.id;
+              logger.info({ rawUrl, newUrl: data.source_url, id: data.id }, 'Successfully uploaded asset to WordPress Media Library');
+              return;
+            } else {
+              logger.warn({ status: res.status, rawUrl }, 'WordPress media upload failed');
+            }
+          } catch (uploadErr: any) {
+            logger.warn({ err: uploadErr?.message, rawUrl }, 'Error uploading asset to WordPress');
+          }
+        }
+
+        // Fallback: If not uploaded to WP or auth unavailable, never leave naked /storage/... path
+        if (rawUrl.startsWith('/storage/') || rawUrl.startsWith('storage/')) {
+          imgObj.url = `${baseSiteUrl}/${rawUrl.replace(/^\//, '')}`;
+        }
+      };
+
+      if (el.settings) {
+        if (el.settings.image) await handleImageUrl(el.settings.image);
+        if (el.settings.background_image) await handleImageUrl(el.settings.background_image);
+        if (el.settings.testimonial_image) await handleImageUrl(el.settings.testimonial_image);
+        if (Array.isArray(el.settings.wp_gallery)) {
+          for (const item of el.settings.wp_gallery) {
+            await handleImageUrl(item);
+          }
+        }
+      }
+
+      if (Array.isArray(el.elements)) {
+        for (const child of el.elements) {
+          await processElement(child);
+        }
+      }
+    };
+
+    for (const rootEl of elements) {
+      await processElement(rootEl);
+    }
   }
 }
 

@@ -15,15 +15,45 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /**
+ * Retrieves the authoritative Elementor and WordPress versions from source-version.json or defaults to Core 4.3.5 / WP 6.8
+ */
+export function getAuthoritativeElementorVersion(): { elementorVersion: string; wpVersion: string } {
+  try {
+    const versionPath = path.resolve(__dirname, '../../skills/elementor/source-version.json');
+    if (fs.existsSync(versionPath)) {
+      const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+      if (data.elementor_core_version) {
+        return {
+          elementorVersion: data.elementor_core_version,
+          wpVersion: '6.8',
+        };
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return {
+    elementorVersion: '4.3.5',
+    wpVersion: '6.8',
+  };
+}
+
+/**
  * Optimizes an Elementor document by pruning undefined, null, and empty redundant control entries,
  * reducing output payload size by up to 35% without breaking schema fidelity.
  */
-export function optimizeElementorDocument(doc: ElementorDocument): ElementorDocument {
+export function optimizeElementorDocument(
+  doc: ElementorDocument,
+  options?: { preserveGlobals?: boolean }
+): ElementorDocument {
+  const authoritative = getAuthoritativeElementorVersion();
   const cleanSettings = (settings?: Record<string, any>): Record<string, any> => {
     if (!settings) return {};
     const cleaned: Record<string, any> = {};
     for (const [key, value] of Object.entries(settings)) {
-      if (key === '__globals__') continue; // Enforce direct hex colors, ignore WordPress theme style globals
+      if (key === '__globals__' && !options?.preserveGlobals && !(doc.page_settings as any)?.preserve_globals) {
+        continue; // Enforce direct hex colors unless globals are explicitly preserved
+      }
       if (value === undefined || value === null || value === '') continue;
       if (typeof value === 'object' && !Array.isArray(value)) {
         if ('unit' in value && (value as any).size === undefined && (value as any).column === undefined) continue;
@@ -49,8 +79,8 @@ export function optimizeElementorDocument(doc: ElementorDocument): ElementorDocu
 
   return {
     version: doc.version || '0.4',
-    elementor_version: doc.elementor_version || '3.24.7',
-    wp_version: doc.wp_version || '6.6.2',
+    elementor_version: doc.elementor_version || authoritative.elementorVersion,
+    wp_version: doc.wp_version || authoritative.wpVersion,
     title: doc.title || 'Exported Template',
     type: doc.type || 'page',
     page_settings: cleanSettings(doc.page_settings) || {
@@ -62,13 +92,14 @@ export function optimizeElementorDocument(doc: ElementorDocument): ElementorDocu
 
 export function serializeElementorTemplate(
   doc: ElementorDocument,
-  options?: { minify?: boolean; optimize?: boolean }
+  options?: { minify?: boolean; optimize?: boolean; preserveGlobals?: boolean }
 ): string {
-  const optimized = options?.optimize !== false ? optimizeElementorDocument(doc) : doc;
+  const authoritative = getAuthoritativeElementorVersion();
+  const optimized = options?.optimize !== false ? optimizeElementorDocument(doc, { preserveGlobals: options?.preserveGlobals }) : doc;
   const envelope = {
     version: optimized.version || '0.4',
-    elementor_version: optimized.elementor_version || '3.24.7',
-    wp_version: optimized.wp_version || '6.6.2',
+    elementor_version: optimized.elementor_version || authoritative.elementorVersion,
+    wp_version: optimized.wp_version || authoritative.wpVersion,
     title: optimized.title || 'Exported Template',
     type: optimized.type || 'page',
     content: optimized.content || [],
@@ -78,6 +109,23 @@ export function serializeElementorTemplate(
   };
 
   return options?.minify ? JSON.stringify(envelope) : JSON.stringify(envelope, null, 2);
+}
+
+/**
+ * Serializes an Elementor document for direct native Elementor editor clipboard pasting.
+ * In Elementor, copying elements stores: { type: 'elementor', siteurl: '...', elements: [...] }.
+ */
+export function serializeElementorClipboard(
+  doc: ElementorDocument,
+  options?: { siteUrl?: string; optimize?: boolean; preserveGlobals?: boolean }
+): string {
+  const optimized = options?.optimize !== false ? optimizeElementorDocument(doc, { preserveGlobals: options?.preserveGlobals }) : doc;
+  const clipboardPayload = {
+    type: 'elementor',
+    siteurl: options?.siteUrl || '',
+    elements: optimized.content || [],
+  };
+  return JSON.stringify(clipboardPayload);
 }
 
 /**

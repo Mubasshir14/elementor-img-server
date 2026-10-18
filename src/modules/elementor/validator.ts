@@ -134,6 +134,18 @@ export class ElementorValidator {
               elementId: element.id,
             });
           }
+
+          if (element.widgetType === 'html' || element.widgetType === 'shortcode') {
+            const codeContent = element.settings?.html || element.settings?.shortcode || '';
+            if (typeof codeContent === 'string' && /<(section|header|footer|nav)\b/i.test(codeContent)) {
+              warnings.push({
+                path: `${path}.settings`,
+                message: `Prohibited full-section custom HTML shortcut detected in widget "${element.widgetType}". Design sections must be built using native Elementor containers and widgets.`,
+                code: 'PROHIBITED_CUSTOM_CODE_SHORTCUT',
+                elementId: element.id,
+              });
+            }
+          }
         }
       }
 

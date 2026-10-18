@@ -33,6 +33,7 @@ import type {
   ConversionDiagnostic,
 } from './types.js';
 import { getRegistry } from './registry.js';
+import { getAuthoritativeElementorVersion } from './serializer.js';
 
 export function generateElementId(): string {
   return crypto.randomBytes(4).toString('hex').slice(0, 7);
@@ -97,11 +98,12 @@ export class ElementorGenerator {
     }
 
     const pageBg = dir.globals?.colors?.background || dir.globals?.colors?.surface || '#ffffff';
+    const authoritative = getAuthoritativeElementorVersion();
 
     const document: ElementorDocument = {
       version: '0.4',
-      elementor_version: '3.24.7',
-      wp_version: '6.6.2',
+      elementor_version: dir.meta?.elementorVersion || authoritative.elementorVersion,
+      wp_version: authoritative.wpVersion,
       title: page?.name || 'Imported Design',
       type: 'page',
       page_settings: {
@@ -189,7 +191,7 @@ export class ElementorGenerator {
   private convertNode(node: DIRNode, dir: DIRDocument): ElementorElement | null {
     if (!node) return null;
 
-    switch (node.kind) {
+    switch ((node as any).kind) {
       case 'container':
       case 'flex-group':
       case 'grid-group':
@@ -263,6 +265,19 @@ export class ElementorGenerator {
 
       case 'input':
         return this.convertInputNode(node);
+
+      case 'image-box':
+        return this.convertImageBoxNode(node as any);
+
+      case 'testimonial':
+        return this.convertTestimonialNode(node as any);
+
+      case 'toggle':
+        return this.convertToggleNode(node as any, dir);
+
+      case 'gallery':
+      case 'image-gallery':
+        return this.convertGalleryNode(node as any);
 
       case 'unknown':
       default:
@@ -381,6 +396,42 @@ export class ElementorGenerator {
       this.explicitResponsiveCount++;
     }
 
+    // Proportional 2-column balancing for split hero / feature rows
+    if (
+      settings.flex_direction === 'row' &&
+      Array.isArray(node.children) &&
+      node.children.length === 2
+    ) {
+      const child0 = node.children[0] as any;
+      const child1 = node.children[1] as any;
+      const isCols =
+        (child0.kind === 'container' || child0.kind === 'flex-group') &&
+        (child1.kind === 'container' || child1.kind === 'flex-group');
+
+      if (isCols) {
+        const c0W = child0.styles?.width;
+        const c1W = child1.styles?.width;
+        const excessivePixel =
+          typeof c0W === 'number' && typeof c1W === 'number' && c0W + c1W > 1400;
+        const missingBoth = !c0W && !c1W;
+        const hasExcessiveSingle =
+          (typeof c0W === 'number' && c0W > 850) || (typeof c1W === 'number' && c1W > 850);
+
+        if (excessivePixel || missingBoth || hasExcessiveSingle) {
+          if (!child0.styles) child0.styles = {};
+          if (!child1.styles) child1.styles = {};
+          child0.styles.width = '55%';
+          child1.styles.width = '45%';
+        }
+      }
+    }
+
+    // Center-align vertical stat groups (e.g. circle counter badge + label below)
+    const hasCounterChild = Array.isArray(node.children) && node.children.some((c: any) => c.kind === 'counter');
+    if (hasCounterChild && (node.direction === 'column' || (!node.direction && settings.flex_direction === 'column'))) {
+      settings.flex_align_items = 'center';
+    }
+
     const elements: ElementorElement[] = [];
     if (Array.isArray(node.children)) {
       for (const child of node.children) {
@@ -469,18 +520,36 @@ export class ElementorGenerator {
 
     const settings: Record<string, any> = {
       text: node.text || 'Click here',
-      link: { url: node.url || '#' },
+      link: { url: node.url || '#', is_external: '', nofollow: '' },
       size: node.size === 'large' ? 'lg' : node.size === 'small' ? 'sm' : 'md',
     };
 
     if (node.styles?.backgroundColor) {
       settings.background_color = node.styles.backgroundColor;
     }
+    if ((node as any).variant === 'outline' && !node.styles?.backgroundColor) {
+      settings.background_color = 'transparent';
+    }
     if (node.styles?.color) {
       settings.button_text_color = node.styles.color;
     }
     if (node.styles?.borderRadius) {
       settings.border_radius = this.mapBorderRadius(node.styles.borderRadius);
+    }
+    if (node.styles?.borderWidth || (node as any).variant === 'outline') {
+      settings.border_border = node.styles?.borderStyle || 'solid';
+      const bWidth = String(node.styles?.borderWidth || 1);
+      settings.border_width = {
+        unit: 'px',
+        top: bWidth,
+        right: bWidth,
+        bottom: bWidth,
+        left: bWidth,
+        isLinked: true,
+      };
+      if (node.styles?.borderColor) {
+        settings.border_color = node.styles.borderColor;
+      }
     }
     if (node.styles?.padding) {
       settings.button_padding = this.mapSpacing(node.styles.padding);
@@ -542,20 +611,35 @@ export class ElementorGenerator {
       settings.alt_text = node.alt;
     }
     if (node.styles?.width) {
-      settings.width = typeof node.styles.width === 'number'
-        ? { unit: 'px', size: node.styles.width }
-        : { unit: '%', size: 100 };
-      if (typeof node.styles.width === 'number' && node.styles.width > 360) {
-        settings.width_tablet = { unit: 'px', size: Math.min(640, node.styles.width) };
-        settings.width_mobile = { unit: '%', size: 100 };
-        this.inferredResponsiveCount++;
+      if (typeof node.styles.width === 'number') {
+        if (node.styles.width > 480) {
+          // Large images inside columns scale to 100% of their container
+          settings.width = { unit: '%', size: 100 };
+          settings.width_tablet = { unit: '%', size: 100 };
+          settings.width_mobile = { unit: '%', size: 100 };
+        } else {
+          settings.width = { unit: 'px', size: node.styles.width };
+          if (node.styles.width > 360) {
+            settings.width_tablet = { unit: 'px', size: Math.min(360, node.styles.width) };
+            settings.width_mobile = { unit: '%', size: 100 };
+          }
+        }
+      } else if (typeof node.styles.width === 'string' && node.styles.width.endsWith('%')) {
+        const pct = parseFloat(node.styles.width);
+        settings.width = { unit: '%', size: isNaN(pct) ? 100 : pct };
+      } else {
+        settings.width = { unit: '%', size: 100 };
       }
+      this.inferredResponsiveCount++;
     }
     if (node.styles?.borderRadius) {
       settings.border_radius = this.mapBorderRadius(node.styles.borderRadius);
     }
     if (node.styles?.height && typeof node.styles.height === 'number') {
-      settings.height = { unit: 'px', size: node.styles.height };
+      // Do not impose rigid fixed pixel heights on large portrait/hero images
+      if (node.styles.height <= 600) {
+        settings.height = { unit: 'px', size: node.styles.height };
+      }
     }
     if ((node as any).composite_graphic_asset) {
       settings.image_fit = 'contain';
@@ -645,11 +729,13 @@ export class ElementorGenerator {
     this.widgetsUsed.add('icon-list');
 
     const items = (node.children || []).map((item) => ({
+      _id: generateElementId().slice(0, 7),
       text: item.text || 'List item',
       selected_icon: {
         value: item.icon ? `fas fa-${item.icon}` : 'fas fa-check',
         library: 'fa-solid',
       },
+      link: { url: (item as any).url || '', is_external: '', nofollow: '' },
     }));
 
     return {
@@ -657,6 +743,7 @@ export class ElementorGenerator {
       elType: 'widget',
       widgetType: 'icon-list',
       settings: {
+        view: 'traditional',
         icon_list: items,
       },
       elements: [],
@@ -702,11 +789,18 @@ export class ElementorGenerator {
     this.elementCount++;
     this.widgetsUsed.add('counter');
 
+    let endingNumber = node.value || 100;
+    let suffix = node.suffix || '';
+    if (endingNumber >= 1000 && endingNumber % 1000 === 0 && !suffix) {
+      endingNumber = endingNumber / 1000;
+      suffix = 'k';
+    }
+
     const settings: Record<string, any> = {
       starting_number: 0,
-      ending_number: node.value || 100,
+      ending_number: endingNumber,
       prefix: node.prefix || '',
-      suffix: node.suffix || '',
+      suffix: suffix,
       title: node.title || '',
     };
 
@@ -732,6 +826,8 @@ export class ElementorGenerator {
 
     if (node.styles?.textAlign) {
       settings.align = node.styles.textAlign;
+    } else {
+      settings.align = 'center';
     }
 
     if (node.responsiveOverrides) {
@@ -739,13 +835,48 @@ export class ElementorGenerator {
       this.explicitResponsiveCount++;
     }
 
-    return {
+    const counterElement: ElementorElement = {
       id: generateElementId(),
       elType: 'widget',
       widgetType: 'counter',
       settings,
       elements: [],
     };
+
+    const isCircular =
+      (node.styles?.borderRadius as any) === 9999 ||
+      (node.styles?.borderRadius as any) === '50%' ||
+      (typeof node.styles?.borderRadius === 'number' && node.styles.borderRadius >= 50);
+
+    if (isCircular && node.styles?.backgroundColor) {
+      const circleSize = 90;
+      settings.duration = 0;
+      return {
+        id: generateElementId(),
+        elType: 'container',
+        settings: {
+          container_type: 'flex',
+          content_width: 'boxed',
+          width: { unit: 'px', size: circleSize },
+          custom_height: { unit: 'px', size: circleSize },
+          height: 'min-height',
+          border_radius: { unit: '%', top: '50', right: '50', bottom: '50', left: '50', isLinked: true },
+          background_background: 'classic',
+          background_color: node.styles.backgroundColor,
+          flex_justify_content: 'center',
+          flex_align_items: 'center',
+          flex_align_self: 'center',
+          align_self: 'center',
+          flex_grow: 0,
+          flex_shrink: 0,
+          flex_direction: 'column',
+          padding: { unit: 'px', top: '0', right: '0', bottom: '0', left: '0', isLinked: true },
+        },
+        elements: [counterElement],
+      };
+    }
+
+    return counterElement;
   }
 
   private convertProgressNode(node: DIRProgressBarNode): ElementorElement {
@@ -772,11 +903,12 @@ export class ElementorGenerator {
     this.widgetsUsed.add('social-icons');
 
     const iconList = (node.platforms || []).map((p) => ({
+      _id: generateElementId().slice(0, 7),
       social_icon: {
         value: `fab fa-${p.name.toLowerCase()}`,
         library: 'fa-brands',
       },
-      link: { url: p.url || '#' },
+      link: { url: p.url || '#', is_external: '', nofollow: '' },
     }));
 
     return {
@@ -813,6 +945,7 @@ export class ElementorGenerator {
     this.widgetsUsed.add('tabs');
 
     const tabList = (node.tabs || []).map((t) => ({
+      _id: generateElementId().slice(0, 7),
       tab_title: t.title || 'Tab',
       tab_content: this.extractChildContent(t.children),
     }));
@@ -834,6 +967,7 @@ export class ElementorGenerator {
     this.widgetsUsed.add('accordion');
 
     const tabList = (node.items || []).map((item) => ({
+      _id: generateElementId().slice(0, 7),
       tab_title: item.title || 'Accordion Item',
       tab_content: this.extractChildContent(item.children),
     }));
@@ -913,7 +1047,7 @@ export class ElementorGenerator {
       widgetType: 'button',
       settings: {
         text: node.text || 'Link',
-        link: { url: node.url || '#' },
+        link: { url: node.url || '#', is_external: '', nofollow: '' },
         button_type: 'default',
         background_color: 'transparent',
         button_text_color: node.styles?.color || '#ffffff',
@@ -998,6 +1132,106 @@ export class ElementorGenerator {
     };
   }
 
+  private convertImageBoxNode(node: any): ElementorElement {
+    this.widgetCount++;
+    this.elementCount++;
+    this.widgetsUsed.add('image-box');
+
+    const settings: Record<string, any> = {
+      image: {
+        url: (node as any).url || (node as any).imageUrl || '',
+        id: (node as any).assetId || '',
+      },
+      title_text: node.title || node.text || 'Feature title',
+      description_text: node.description || '',
+      title_size: 'h3',
+      position: node.imagePosition || 'top',
+    };
+
+    if (node.url || node.link) {
+      settings.link = { url: node.url || node.link || '#', is_external: '', nofollow: '' };
+    }
+    if (node.styles?.color) settings.title_color = node.styles.color;
+
+    return {
+      id: generateElementId(),
+      elType: 'widget',
+      widgetType: 'image-box',
+      settings,
+      elements: [],
+    };
+  }
+
+  private convertTestimonialNode(node: any): ElementorElement {
+    this.widgetCount++;
+    this.elementCount++;
+    this.widgetsUsed.add('testimonial');
+
+    return {
+      id: generateElementId(),
+      elType: 'widget',
+      widgetType: 'testimonial',
+      settings: {
+        testimonial_content: node.content || node.text || '',
+        testimonial_name: node.name || node.author || 'Author',
+        testimonial_job: node.job || node.role || '',
+        testimonial_image: { url: node.imageUrl || '', id: '' },
+        testimonial_alignment: node.styles?.textAlign || 'center',
+        image_size: 'thumbnail',
+      },
+      elements: [],
+    };
+  }
+
+  private convertToggleNode(node: any, dir: DIRDocument): ElementorElement {
+    this.widgetCount++;
+    this.elementCount++;
+    this.widgetsUsed.add('toggle');
+
+    const tabList = (node.items || node.children || []).map((item: any) => ({
+      _id: generateElementId().slice(0, 7),
+      tab_title: item.title || 'Item',
+      tab_content: this.extractChildContent(Array.isArray(item.children) ? item.children : [item]),
+    }));
+
+    return {
+      id: generateElementId(),
+      elType: 'widget',
+      widgetType: 'toggle',
+      settings: {
+        tabs: tabList,
+        title_html_tag: 'div',
+      },
+      elements: [],
+    };
+  }
+
+  private convertGalleryNode(node: any): ElementorElement {
+    this.widgetCount++;
+    this.elementCount++;
+    this.widgetsUsed.add('image-gallery');
+
+    const gallery = (node.images || node.children || []).map((img: any) => ({
+      url: img.url || img.imageUrl || '',
+      id: img.assetId || '',
+    }));
+
+    return {
+      id: generateElementId(),
+      elType: 'widget',
+      widgetType: 'image-gallery',
+      settings: {
+        wp_gallery: gallery,
+        gallery_columns: String(node.columns || '3'),
+        thumbnail_size: 'medium',
+        gallery_display_caption: 'none',
+        gallery_link: 'none',
+        open_lightbox: 'no',
+      },
+      elements: [],
+    };
+  }
+
   private convertFallbackNode(node: any): ElementorElement {
     this.widgetCount++;
     this.elementCount++;
@@ -1063,15 +1297,23 @@ export class ElementorGenerator {
     }
 
     if (styles.width) {
-      if (typeof styles.width === 'number') {
+      if (typeof styles.width === 'string' && styles.width.endsWith('%')) {
+        const pct = parseFloat(styles.width);
+        if (pct === 100) {
+          settings.content_width = 'full';
+        } else if (!isNaN(pct)) {
+          settings.width = { unit: '%', size: pct };
+          settings.width_tablet = { unit: '%', size: 100 };
+          settings.width_mobile = { unit: '%', size: 100 };
+          this.inferredResponsiveCount++;
+        }
+      } else if (typeof styles.width === 'number') {
         settings.width = { unit: 'px', size: styles.width };
         if (styles.width > 360) {
           settings.width_tablet = { unit: 'px', size: Math.min(680, styles.width) };
           settings.width_mobile = { unit: '%', size: 100 };
           this.inferredResponsiveCount++;
         }
-      } else if (styles.width === '100%') {
-        settings.content_width = 'full';
       }
     }
 
@@ -1085,11 +1327,12 @@ export class ElementorGenerator {
     const minH = styles.minHeight ?? (isContainer ? styles.height : undefined);
     if (minH !== undefined) {
       if (typeof minH === 'number') {
+        const clampedH = Math.min(800, Math.max(0, minH));
         settings.height = 'min-height';
-        settings.custom_height = { unit: 'px', size: minH, sizes: [] };
-        if (minH > 400) {
-          settings.custom_height_tablet = { unit: 'px', size: Math.round(minH * 0.8), sizes: [] };
-          settings.custom_height_mobile = { unit: 'px', size: Math.max(280, Math.round(minH * 0.65)), sizes: [] };
+        settings.custom_height = { unit: 'px', size: clampedH, sizes: [] };
+        if (clampedH > 400) {
+          settings.custom_height_tablet = { unit: 'px', size: Math.round(clampedH * 0.8), sizes: [] };
+          settings.custom_height_mobile = { unit: 'px', size: Math.max(280, Math.round(clampedH * 0.65)), sizes: [] };
           this.inferredResponsiveCount++;
         }
       } else if (typeof minH === 'string' && minH.endsWith('vh')) {

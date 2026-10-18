@@ -1,0 +1,548 @@
+{
+  "meta": {
+    "notes": [
+      "Dark fitness/gym landing page with high-contrast vibrant orange accents",
+      "Two-column hero composition with circular metric counters and a custom masked athlete visual"
+    ],
+    "sourceWidth": 3333,
+    "sourceHeight": 2000,
+    "analysisModel": "gemini-3.8-flash",
+    "promptVersion": "v2.1.0",
+    "schemaVersion": "1.0.0",
+    "confidenceScore": 0.96,
+    "sourceImageHash": "5ec591943c93fd21c96a9a38ecc79ae8dc88564adeb14fd02a50c52f516915e2",
+    "analysisProvider": "gemini",
+    "analysisTimestamp": "2026-10-18T04:37:50.871Z"
+  },
+  "pages": [
+    {
+      "id": "page_main",
+      "name": "Home",
+      "sections": [
+        {
+          "id": "sec_navigation",
+          "role": "header",
+          "styles": {
+            "padding": {
+              "top": 40,
+              "left": 120,
+              "right": 120,
+              "bottom": 32
+            },
+            "backgroundColor": "#081516"
+          },
+          "children": [
+            {
+              "id": "node_nav_row",
+              "kind": "flex-group",
+              "styles": {
+                "gap": 32
+              },
+              "children": [
+                {
+                  "id": "node_logo_wrapper",
+                  "alt": "STRONG BODY Logo",
+                  "url": "/storage/projects/92b98e6c-48c6-4a45-83d3-80a91cd0a967/assets/asset_brand_logo_aba6ef58.png",
+                  "kind": "image",
+                  "styles": {
+                    "width": 208,
+                    "height": 72
+                  },
+                  "assetId": "asset_brand_logo",
+                  "confidence": 0.98
+                },
+                {
+                  "id": "node_nav_links",
+                  "kind": "flex-group",
+                  "styles": {
+                    "gap": 48
+                  },
+                  "children": [
+                    {
+                      "id": "link_home",
+                      "kind": "link",
+                      "text": "Home",
+                      "styles": {
+                        "color": "#FF4625",
+                        "fontSize": 16,
+                        "fontWeight": 600
+                      },
+                      "confidence": 0.98
+                    },
+                    {
+                      "id": "link_services",
+                      "kind": "link",
+                      "text": "Services",
+                      "styles": {
+                        "color": "#E5E7EB",
+                        "fontSize": 16,
+                        "fontWeight": 500
+                      },
+                      "confidence": 0.95
+                    },
+                    {
+                      "id": "link_about",
+                      "kind": "link",
+                      "text": "About Us",
+                      "styles": {
+                        "color": "#E5E7EB",
+                        "fontSize": 16,
+                        "fontWeight": 500
+                      },
+                      "confidence": 0.95
+                    },
+                    {
+                      "id": "link_training",
+                      "kind": "link",
+                      "text": "Training",
+                      "styles": {
+                        "color": "#E5E7EB",
+                        "fontSize": 16,
+                        "fontWeight": 500
+                      },
+                      "confidence": 0.95
+                    },
+                    {
+                      "id": "link_features",
+                      "kind": "link",
+                      "text": "Features",
+                      "styles": {
+                        "color": "#E5E7EB",
+                        "fontSize": 16,
+                        "fontWeight": 500
+                      },
+                      "confidence": 0.95
+                    },
+                    {
+                      "id": "link_pricing",
+                      "kind": "link",
+                      "text": "Pricing",
+                      "styles": {
+                        "color": "#E5E7EB",
+                        "fontSize": 16,
+                        "fontWeight": 500
+                      },
+                      "confidence": 0.95
+                    }
+                  ],
+                  "direction": "row",
+                  "confidence": 0.96
+                },
+                {
+                  "id": "btn_join_now",
+                  "kind": "button",
+                  "text": "Join Now",
+                  "styles": {
+                    "color": "#FFFFFF",
+                    "padding": {
+                      "top": 12,
+                      "left": 28,
+                      "right": 28,
+                      "bottom": 12
+                    },
+                    "fontSize": 16,
+                    "fontWeight": 600,
+                    "borderColor": "#FF4625",
+                    "borderWidth": 1,
+                    "borderRadius": 50,
+                    "backgroundColor": "transparent"
+                  },
+                  "variant": "outline",
+                  "confidence": 0.97
+                }
+              ],
+              "direction": "row",
+              "confidence": 0.98
+            }
+          ],
+          "confidence": 0.98
+        },
+        {
+          "id": "sec_hero",
+          "role": "hero",
+          "label": "Hero Section",
+          "styles": {
+            "padding": {
+              "top": 60,
+              "left": 120,
+              "right": 80,
+              "bottom": 80
+            },
+            "backgroundColor": "#081516"
+          },
+          "children": [
+            {
+              "id": "hero_grid_container",
+              "kind": "flex-group",
+              "styles": {
+                "gap": 64
+              },
+              "children": [
+                {
+                  "id": "hero_content_column",
+                  "kind": "flex-group",
+                  "styles": {
+                    "gap": 36
+                  },
+                  "children": [
+                    {
+                      "id": "hero_headline",
+                      "kind": "heading",
+                      "text": "Build a perfect life",
+                      "level": 1,
+                      "styles": {
+                        "color": "#FFFFFF",
+                        "fontSize": 76,
+                        "fontWeight": 800,
+                        "lineHeight": 1.1,
+                        "letterSpacing": -1
+                      },
+                      "confidence": 0.99
+                    },
+                    {
+                      "id": "hero_description",
+                      "html": "<p>Lorem ipsum dolor sit amet, consectetuer adipiscing elit, sed diam nonummy nibh euismod tincidunt ut laoreet dolore magna aliquam erat volutpat. Ut wisi enim ad minim veniam, quis nostrud exerci tation ullamcorper suscipit lobortis nisl ut aliquip ex ea commodo consequat.</p>",
+                      "kind": "text",
+                      "styles": {
+                        "color": "#94A3B8",
+                        "fontSize": 17,
+                        "fontWeight": 400,
+                        "lineHeight": 1.6
+                      },
+                      "confidence": 0.95
+                    },
+                    {
+                      "id": "hero_action_row",
+                      "kind": "flex-group",
+                      "styles": {
+                        "gap": 20
+                      },
+                      "children": [
+                        {
+                          "id": "txt_haven_started",
+                          "html": "<span>Haven't you started yet?</span>",
+                          "kind": "text",
+                          "styles": {
+                            "color": "#FFFFFF",
+                            "fontSize": 18,
+                            "fontWeight": 600
+                          },
+                          "confidence": 0.96
+                        },
+                        {
+                          "id": "btn_start_now",
+                          "kind": "button",
+                          "text": "Start Now",
+                          "styles": {
+                            "color": "#FFFFFF",
+                            "padding": {
+                              "top": 14,
+                              "left": 34,
+                              "right": 34,
+                              "bottom": 14
+                            },
+                            "fontSize": 17,
+                            "fontWeight": 600,
+                            "borderRadius": 50,
+                            "backgroundColor": "#FF4625"
+                          },
+                          "variant": "primary",
+                          "confidence": 0.99
+                        }
+                      ],
+                      "direction": "row",
+                      "confidence": 0.97
+                    },
+                    {
+                      "id": "hero_stats_row",
+                      "kind": "flex-group",
+                      "styles": {
+                        "gap": 48,
+                        "padding": {
+                          "top": 32,
+                          "left": 0,
+                          "right": 0,
+                          "bottom": 0
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": "stat_group_clients",
+                          "kind": "flex-group",
+                          "styles": {
+                            "gap": 16
+                          },
+                          "children": [
+                            {
+                              "id": "badge_circle_10k",
+                              "kind": "counter",
+                              "value": 10000,
+                              "styles": {
+                                "color": "#FFFFFF",
+                                "padding": {
+                                  "top": 36,
+                                  "left": 36,
+                                  "right": 36,
+                                  "bottom": 36
+                                },
+                                "fontSize": 38,
+                                "fontWeight": 800,
+                                "borderRadius": 9999,
+                                "backgroundColor": "#FF4625"
+                              },
+                              "confidence": 0.99
+                            },
+                            {
+                              "id": "label_clients",
+                              "html": "<p>Happy Clients</p>",
+                              "kind": "text",
+                              "styles": {
+                                "color": "#FFFFFF",
+                                "fontSize": 18,
+                                "fontWeight": 600
+                              },
+                              "confidence": 0.97
+                            }
+                          ],
+                          "direction": "column",
+                          "confidence": 0.98
+                        },
+                        {
+                          "id": "stat_group_experience",
+                          "kind": "flex-group",
+                          "styles": {
+                            "gap": 16
+                          },
+                          "children": [
+                            {
+                              "id": "badge_circle_20",
+                              "kind": "counter",
+                              "value": 20,
+                              "styles": {
+                                "color": "#FFFFFF",
+                                "padding": {
+                                  "top": 36,
+                                  "left": 46,
+                                  "right": 46,
+                                  "bottom": 36
+                                },
+                                "fontSize": 42,
+                                "fontWeight": 800,
+                                "borderRadius": 9999,
+                                "backgroundColor": "#FF4625"
+                              },
+                              "confidence": 0.99
+                            },
+                            {
+                              "id": "label_experience",
+                              "html": "<p>Years Experience</p>",
+                              "kind": "text",
+                              "styles": {
+                                "color": "#FFFFFF",
+                                "fontSize": 18,
+                                "fontWeight": 600
+                              },
+                              "confidence": 0.97
+                            }
+                          ],
+                          "direction": "column",
+                          "confidence": 0.98
+                        },
+                        {
+                          "id": "stat_group_trainers",
+                          "kind": "flex-group",
+                          "styles": {
+                            "gap": 16
+                          },
+                          "children": [
+                            {
+                              "id": "badge_circle_500",
+                              "kind": "counter",
+                              "value": 500,
+                              "styles": {
+                                "color": "#FFFFFF",
+                                "padding": {
+                                  "top": 36,
+                                  "left": 36,
+                                  "right": 36,
+                                  "bottom": 36
+                                },
+                                "fontSize": 38,
+                                "fontWeight": 800,
+                                "borderRadius": 9999,
+                                "backgroundColor": "#FF4625"
+                              },
+                              "confidence": 0.99
+                            },
+                            {
+                              "id": "label_trainers",
+                              "html": "<p>Expert Trainers</p>",
+                              "kind": "text",
+                              "styles": {
+                                "color": "#FFFFFF",
+                                "fontSize": 18,
+                                "fontWeight": 600
+                              },
+                              "confidence": 0.97
+                            }
+                          ],
+                          "direction": "column",
+                          "confidence": 0.98
+                        }
+                      ],
+                      "direction": "row",
+                      "confidence": 0.98
+                    }
+                  ],
+                  "direction": "column",
+                  "confidence": 0.98
+                },
+                {
+                  "id": "hero_visual_column",
+                  "kind": "container",
+                  "styles": {
+                    "width": 1256,
+                    "height": 1476
+                  },
+                  "children": [
+                    {
+                      "id": "img_athlete_composite",
+                      "alt": "Male fitness athlete exercising in gym",
+                      "url": "/storage/projects/92b98e6c-48c6-4a45-83d3-80a91cd0a967/assets/asset_hero_athlete_4da00721.png",
+                      "kind": "image",
+                      "styles": {
+                        "width": 1256,
+                        "height": 1476
+                      },
+                      "assetId": "asset_hero_athlete",
+                      "objectFit": "cover",
+                      "confidence": 0.98
+                    }
+                  ],
+                  "confidence": 0.98
+                }
+              ],
+              "direction": "row",
+              "confidence": 0.97
+            }
+          ],
+          "confidence": 0.97,
+          "canvas_bounds": {
+            "crop_mockup": true,
+            "primary_hex": "#081516",
+            "inner_bg_type": "solid",
+            "secondary_hex": "#081516",
+            "gradient_angle": 0
+          }
+        }
+      ]
+    }
+  ],
+  "assets": [
+    {
+      "id": "asset_brand_logo",
+      "role": "Strong Body brand emblem and wordmark",
+      "type": "logo",
+      "confidence": 0.98,
+      "sourceRect": {
+        "x": 483,
+        "y": 222,
+        "width": 208,
+        "height": 72
+      },
+      "placeholder": "/storage/projects/92b98e6c-48c6-4a45-83d3-80a91cd0a967/assets/asset_brand_logo_aba6ef58.png",
+      "composite_graphic_asset": false
+    },
+    {
+      "id": "asset_hero_athlete",
+      "role": "Muscular male athlete performing squat exercise in gym with modern graphic frame",
+      "type": "image",
+      "confidence": 0.97,
+      "sourceRect": {
+        "x": 1824,
+        "y": 344,
+        "width": 1256,
+        "height": 1476
+      },
+      "placeholder": "/storage/projects/92b98e6c-48c6-4a45-83d3-80a91cd0a967/assets/asset_hero_athlete_4da00721.png",
+      "composite_graphic_asset": true
+    },
+    {
+      "id": "asset_floating_badge_orange",
+      "role": "Orange vertical capsule with dotted pattern overlay",
+      "type": "image",
+      "confidence": 0.95,
+      "sourceRect": {
+        "x": 2862,
+        "y": 344,
+        "width": 218,
+        "height": 570
+      },
+      "placeholder": "/storage/projects/92b98e6c-48c6-4a45-83d3-80a91cd0a967/assets/asset_floating_badge_orange_6bd4c999.png",
+      "composite_graphic_asset": true
+    },
+    {
+      "id": "asset_bottom_accent_strip",
+      "role": "Bottom left orange gradient ribbon with white dotted matrix",
+      "type": "image",
+      "confidence": 0.94,
+      "sourceRect": {
+        "x": 173,
+        "y": 1736,
+        "width": 1215,
+        "height": 108
+      },
+      "placeholder": "/storage/projects/92b98e6c-48c6-4a45-83d3-80a91cd0a967/assets/asset_bottom_accent_strip_863faddb.png",
+      "composite_graphic_asset": true
+    }
+  ],
+  "globals": {
+    "colors": {
+      "text": "#FFFFFF",
+      "accent": "#FF5722",
+      "border": "#243739",
+      "primary": "#FF4625",
+      "surface": "#0C1F21",
+      "secondary": "#95A2A5",
+      "background": "#081516"
+    },
+    "spacing": {
+      "base": 8,
+      "unit": "px",
+      "sectionGap": 48,
+      "containerMaxWidth": 1440
+    },
+    "typography": {
+      "scale": 1.25,
+      "baseSize": 16,
+      "bodyFont": "Inter",
+      "headingFont": "Montserrat",
+      "fontFamilies": [
+        "Inter",
+        "Montserrat",
+        "sans-serif"
+      ]
+    }
+  },
+  "version": "1.0.0",
+  "breakpoints": {
+    "mobile": {
+      "max": 767,
+      "min": 320
+    },
+    "tablet": {
+      "max": 1023,
+      "min": 768
+    },
+    "desktop": {
+      "min": 1024
+    }
+  },
+  "canvas_bounds": {
+    "crop_mockup": true,
+    "primary_hex": "#081516",
+    "inner_bg_type": "solid",
+    "secondary_hex": "#050E0F",
+    "gradient_angle": 145
+  }
+}

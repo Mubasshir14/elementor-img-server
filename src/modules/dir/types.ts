@@ -77,6 +77,7 @@ export interface DIRMeta {
   confidenceScore: number; // 0-1
   schemaVersion: DIRVersion;
   promptVersion: string;
+  elementorVersion?: string;
   notes?: string[];
 }
 
@@ -216,6 +217,11 @@ export type DIRNodeKind =
   | 'accordion'
   | 'rating'
   | 'badge'
+  | 'image-box'
+  | 'testimonial'
+  | 'toggle'
+  | 'gallery'
+  | 'image-gallery'
   | 'unknown';
 
 export interface DIRNodeBase {
