@@ -168,6 +168,15 @@ export class AIRouter {
         if (this.isProviderAvailable(env.AI_PROVIDER as AIProvider)) {
           return env.AI_PROVIDER as AIProvider;
         }
+        if (this.isProviderAvailable('gemini')) {
+          return 'gemini';
+        }
+        if (this.isProviderAvailable('openrouter')) {
+          return 'openrouter';
+        }
+        if (this.isProviderAvailable('groq')) {
+          return 'groq';
+        }
         if (isMockPermitted) return 'mock';
         throw new AIProviderError('No AI provider is configured or available for structure tasks.', 'groq', false, { role });
 
@@ -177,6 +186,15 @@ export class AIRouter {
         }
         if (this.isProviderAvailable(env.AI_PROVIDER as AIProvider)) {
           return env.AI_PROVIDER as AIProvider;
+        }
+        if (this.isProviderAvailable('openrouter')) {
+          return 'openrouter';
+        }
+        if (this.isProviderAvailable('gemini')) {
+          return 'gemini';
+        }
+        if (this.isProviderAvailable('groq')) {
+          return 'groq';
         }
         if (isMockPermitted) return 'mock';
         throw new AIProviderError('No AI provider is configured or available for review tasks.', 'groq', false, { role });
@@ -190,7 +208,9 @@ export class AIRouter {
   public findAlternativeVisionProvider(excludeProvider: AIProvider, modelOverride?: string): { provider: AIProvider; model: string } | null {
     // 1. Try Gemini if not excluded and available
     if (excludeProvider !== 'gemini' && env.ENABLE_GEMINI && this.isProviderAvailable('gemini')) {
-      const model = process.env.GEMINI_MODEL || env.GEMINI_MODEL || 'gemini-3.8-flash';
+      const model = (modelOverride && isModelImageCapable(modelOverride, 'gemini'))
+        ? modelOverride
+        : (process.env.GEMINI_MODEL || env.GEMINI_MODEL || 'gemini-3.5-flash-lite');
       if (isModelImageCapable(model, 'gemini')) {
         return { provider: 'gemini', model };
       }
@@ -198,7 +218,10 @@ export class AIRouter {
 
     // 2. Try OpenRouter if not excluded, available, and image-capable
     if (excludeProvider !== 'openrouter' && this.isProviderAvailable('openrouter')) {
-      const model = modelOverride || process.env.OPENROUTER_MODEL || '';
+      const defaultOpenRouter = process.env.OPENROUTER_MODEL || env.OPENROUTER_MODEL || 'anthropic/claude-3.5-sonnet';
+      const model = (modelOverride && isModelImageCapable(modelOverride, 'openrouter') && modelOverride.includes('/'))
+        ? modelOverride
+        : defaultOpenRouter;
       if (model && isModelImageCapable(model, 'openrouter')) {
         return { provider: 'openrouter', model };
       }
@@ -206,7 +229,10 @@ export class AIRouter {
 
     // 3. Try Groq if not excluded, available, and image-capable
     if (excludeProvider !== 'groq' && this.isProviderAvailable('groq')) {
-      const model = modelOverride || process.env.GROQ_MODEL || env.AI_MODEL || '';
+      const defaultGroq = process.env.GROQ_MODEL || env.AI_MODEL || '';
+      const model = (modelOverride && isModelImageCapable(modelOverride, 'groq'))
+        ? modelOverride
+        : defaultGroq;
       if (model && isModelImageCapable(model, 'groq')) {
         return { provider: 'groq', model };
       }
@@ -220,7 +246,7 @@ export class AIRouter {
       return { provider: 'groq', model: process.env.GROQ_MODEL || env.GROQ_MODEL || 'openai/gpt-oss-120b' };
     }
     if (excludeProvider !== 'gemini' && env.ENABLE_GEMINI && this.isProviderAvailable('gemini')) {
-      return { provider: 'gemini', model: process.env.GEMINI_MODEL || env.GEMINI_MODEL || 'gemini-3.8-flash' };
+      return { provider: 'gemini', model: process.env.GEMINI_MODEL || env.GEMINI_MODEL || 'gemini-3.5-flash' };
     }
     if (excludeProvider !== 'openrouter' && this.isProviderAvailable('openrouter')) {
       return { provider: 'openrouter', model: process.env.OPENROUTER_MODEL };
@@ -259,8 +285,8 @@ export class AIRouter {
       req.modelId ||
       (providerName === 'gemini'
         ? (req.role === 'vision'
-            ? (process.env.VISION_AI_MODEL || env.VISION_AI_MODEL || process.env.GEMINI_MODEL || env.GEMINI_MODEL || 'gemini-3.8-flash')
-            : (process.env.GEMINI_MODEL || env.GEMINI_MODEL || 'gemini-3.8-flash'))
+            ? (process.env.VISION_AI_MODEL || env.VISION_AI_MODEL || process.env.GEMINI_MODEL || env.GEMINI_MODEL || 'gemini-3.5-flash-lite')
+            : (process.env.GEMINI_MODEL || env.GEMINI_MODEL || 'gemini-3.5-flash-lite'))
         : providerName === 'groq'
         ? (req.role === 'structure'
             ? (process.env.STRUCTURE_AI_MODEL || env.STRUCTURE_AI_MODEL || process.env.GROQ_MODEL || env.GROQ_MODEL || process.env.AI_MODEL || env.AI_MODEL || 'openai/gpt-oss-120b')
@@ -345,8 +371,15 @@ export class AIRouter {
         this.setProviderCooldown(providerName, retryAfterSec * 1000, 'Rate limit / quota exhaustion');
       }
 
-      // Bounded fallback: Only for retryable errors, fallback to at most ONE secondary provider
-      const isRetryable = err.isRetryable ?? (err.statusCode === 429 || err.statusCode === 502 || err.statusCode === 503 || err.statusCode === 504);
+      // Bounded fallback: For retryable errors or JSON generation failure, fallback to at most ONE secondary provider
+      const isRetryable = err.isRetryable ?? (
+        err.statusCode === 429 ||
+        err.statusCode === 500 ||
+        err.statusCode === 502 ||
+        err.statusCode === 503 ||
+        err.statusCode === 504 ||
+        (err.message && err.message.toLowerCase().includes('failed to generate json'))
+      );
 
       if (isRetryable && providerName !== 'mock') {
         const isMockPermitted = (env.NODE_ENV === 'test' && !this.allowNonMockInTest) || env.AI_PROVIDER === 'mock' || process.env.ALLOW_MOCK_FALLBACK === 'true';

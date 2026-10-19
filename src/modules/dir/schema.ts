@@ -41,7 +41,9 @@ const dirStyles = z.object({
   // Background
   backgroundColor: z.string().optional(),
   backgroundImage: z.string().optional(),
-  backgroundGradient: z.string().optional(),
+  backgroundImagePath: z.string().optional(),
+  backgroundImageAssetId: z.string().optional(),
+  backgroundGradient: z.union([z.string(), z.record(z.any())]).optional(),
   backgroundSize: z.string().optional(),
   backgroundPosition: z.string().optional(),
   backgroundOverlay: z.string().optional(),
@@ -204,6 +206,12 @@ const dirNodeSchema: z.ZodType<any> = z.lazy(() =>
       text: z.string(),
       level: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)]),
       htmlTag: z.string().optional(),
+      accent: z.object({
+        text: z.string(),
+        color: z.string().optional(),
+      }).optional(),
+      accentWord: z.string().optional(),
+      accentColor: z.string().optional(),
     }).strict(),
     // Text
     z.object({
@@ -233,6 +241,8 @@ const dirNodeSchema: z.ZodType<any> = z.lazy(() =>
       objectFit: z.enum(['cover', 'contain', 'fill', 'none']).optional(),
       aspectRatio: z.string().optional(),
       url: z.string().optional(),
+      path: z.string().optional(),
+      imageUrl: z.string().optional(),
       width: z.number().positive().optional(),
       height: z.number().positive().optional(),
       seed: z.number().int().optional(),
@@ -396,6 +406,8 @@ const dirAssetSchema = z.object({
   sourceRect: dirRect.optional(),
   description: z.string().optional(),
   placeholder: z.string().optional(),
+  url: z.string().optional(),
+  path: z.string().optional(),
   confidence: z.number().min(0).max(1),
   width: z.number().positive().optional(),
   height: z.number().positive().optional(),

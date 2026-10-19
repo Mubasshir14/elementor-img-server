@@ -129,6 +129,8 @@ export interface DIRAsset {
   sourceRect?: DIRRect;
   description?: string;
   placeholder?: string;
+  url?: string;
+  path?: string;
   confidence: number; // 0-1
   width?: number;
   height?: number;
@@ -272,6 +274,9 @@ export interface DIRHeadingNode extends DIRNodeBase {
   text: string;
   level: 1 | 2 | 3 | 4 | 5 | 6;
   htmlTag?: string;
+  accent?: { text: string; color?: string };
+  accentWord?: string;
+  accentColor?: string;
 }
 
 export interface DIRTextNode extends DIRNodeBase {
@@ -298,6 +303,8 @@ export interface DIRImageNode extends DIRNodeBase {
   objectFit?: 'cover' | 'contain' | 'fill' | 'none';
   aspectRatio?: string;
   url?: string;
+  path?: string;
+  imageUrl?: string;
   width?: number;
   height?: number;
   seed?: number;
@@ -471,7 +478,9 @@ export interface DIRStyles {
   // Background
   backgroundColor?: string;
   backgroundImage?: string;
-  backgroundGradient?: string;
+  backgroundImagePath?: string;
+  backgroundImageAssetId?: string;
+  backgroundGradient?: string | Record<string, any>;
   backgroundSize?: string;
   backgroundPosition?: string;
   backgroundOverlay?: string;

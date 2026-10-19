@@ -81,7 +81,7 @@ export class GeminiAdapter implements AIProviderAdapter {
       options.defaultModel ||
       env.GEMINI_MODEL ||
       process.env.GEMINI_MODEL ||
-      'gemini-3.8-flash';
+      'gemini-3.5-flash-lite';
     this.defaultTimeoutMs = options.defaultTimeoutMs || 60000;
   }
 
@@ -296,7 +296,7 @@ export class GeminiAdapter implements AIProviderAdapter {
       process.env.GEMINI_MODEL ||
       env.GEMINI_MODEL ||
       this.defaultModel ||
-      'gemini-3.8-flash';
+      'gemini-3.5-flash-lite';
     const model = req.modelId || configuredModel;
     const timeoutMs = req.timeout || this.defaultTimeoutMs;
     const startTime = Date.now();
@@ -335,16 +335,16 @@ export class GeminiAdapter implements AIProviderAdapter {
       requestPayload.systemInstruction = systemInstruction;
     }
 
-    const cleanModelName = model.replace(/^models\//, '');
-    const endpoint = `${this.baseUrl}/models/${cleanModelName}:generateContent?key=${encodeURIComponent(
-      this.apiKey
-    )}`;
+    let cleanModelName = model.replace(/^models\//, '');
 
     const maxAttempts = 2;
     let attempt = 0;
 
     while (attempt < maxAttempts) {
       attempt++;
+      const endpoint = `${this.baseUrl}/models/${cleanModelName}:generateContent?key=${encodeURIComponent(
+        this.apiKey
+      )}`;
       const controller = new AbortController();
       const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -441,6 +441,29 @@ export class GeminiAdapter implements AIProviderAdapter {
               },
               'Gemini API transient error encountered; executing bounded retry with backoff'
             );
+
+            const isHighDemandOrQuota =
+              response.status === 503 ||
+              response.status === 429 ||
+              errorMessage.toLowerCase().includes('high demand') ||
+              errorMessage.toLowerCase().includes('quota') ||
+              errorMessage.toLowerCase().includes('resource_exhausted');
+
+            if (isHighDemandOrQuota) {
+              const fallbackCandidates = [
+                'gemini-3.5-flash-lite',
+                'gemini-flash-lite-latest',
+                'gemini-3.5-flash',
+              ];
+              const fallbackModel =
+                fallbackCandidates.find((m) => m !== cleanModelName) ||
+                'gemini-3.5-flash-lite';
+              logger.warn(
+                { from: cleanModelName, to: fallbackModel, attempt, maxAttempts },
+                'Gemini model is experiencing high demand (503) or quota exhaustion (429); failing over to available flash lite sibling model for bounded retry'
+              );
+              cleanModelName = fallbackModel;
+            }
 
             clearTimeout(timeoutHandle);
             await new Promise((res) => setTimeout(res, waitMs));

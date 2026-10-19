@@ -53,6 +53,49 @@ export function isDarkColor(colorStr?: string): boolean {
   return false;
 }
 
+export function canonicalizeFontFamily(font?: string): string {
+  if (!font || typeof font !== 'string') return 'Plus Jakarta Sans';
+  const clean = font.replace(/['"]/g, '').trim();
+  const lower = clean.toLowerCase();
+
+  // Specific Google Fonts mapping
+  if (lower.includes('jakarta')) return 'Plus Jakarta Sans';
+  if (lower.includes('inter')) return 'Inter';
+  if (lower.includes('poppins')) return 'Poppins';
+  if (lower.includes('roboto mono')) return 'Roboto Mono';
+  if (lower.includes('roboto')) return 'Roboto';
+  if (lower.includes('montserrat')) return 'Montserrat';
+  if (lower.includes('outfit')) return 'Outfit';
+  if (lower.includes('playfair')) return 'Playfair Display';
+  if (lower.includes('merriweather')) return 'Merriweather';
+  if (lower.includes('dm sans') || lower.includes('dmsans')) return 'DM Sans';
+  if (lower.includes('lato')) return 'Lato';
+  if (lower.includes('open sans') || lower.includes('opensans')) return 'Open Sans';
+  if (lower.includes('raleway')) return 'Raleway';
+  if (lower.includes('work sans') || lower.includes('worksans')) return 'Work Sans';
+  if (lower.includes('space gro')) return 'Space Grotesk';
+  if (lower.includes('syne')) return 'Syne';
+  if (lower.includes('clash')) return 'Clash Display';
+  if (lower.includes('satoshi')) return 'Satoshi';
+  if (lower.includes('manrope')) return 'Manrope';
+  if (lower.includes('urbanist')) return 'Urbanist';
+
+  // Generic categories
+  if (lower.includes('sans-serif') || lower.includes('sans')) return 'Inter';
+  if (lower.includes('serif')) return 'Playfair Display';
+  if (lower.includes('mono')) return 'Roboto Mono';
+  if (lower.includes('display')) return 'Outfit';
+
+  return clean;
+}
+
+export function getEffectiveBackgroundColor(nodeStyles?: DIRStyles, dir?: DIRDocument): string {
+  if (nodeStyles?.backgroundColor && nodeStyles.backgroundColor !== 'transparent') {
+    return nodeStyles.backgroundColor;
+  }
+  return dir?.globals?.colors?.background || dir?.globals?.colors?.surface || '#ffffff';
+}
+
 export class ElementorGenerator {
   private registry = getRegistry();
   private widgetsUsed = new Set<string>();
@@ -100,17 +143,53 @@ export class ElementorGenerator {
     const pageBg = dir.globals?.colors?.background || dir.globals?.colors?.surface || '#ffffff';
     const authoritative = getAuthoritativeElementorVersion();
 
+    const rawGlobalGrad = (dir.globals?.colors as any)?.backgroundGradient;
+    const isCanvasGradient =
+      Boolean(rawGlobalGrad) ||
+      dir.canvas_bounds?.inner_bg_type === 'gradient' ||
+      Boolean(dir.canvas_bounds?.primary_hex && dir.canvas_bounds?.secondary_hex && dir.canvas_bounds.primary_hex !== dir.canvas_bounds.secondary_hex);
+
+    const pageSettings: Record<string, any> = {
+      template: 'elementor_canvas',
+      background_background: isCanvasGradient ? 'gradient' : 'classic',
+      background_color: dir.canvas_bounds?.primary_hex || pageBg,
+    };
+
+    if (isCanvasGradient) {
+      let startColor = dir.canvas_bounds?.primary_hex || pageBg;
+      let endColor = dir.canvas_bounds?.secondary_hex || pageBg;
+      let angle = dir.canvas_bounds?.gradient_angle ?? 180;
+
+      if (typeof rawGlobalGrad === 'object' && rawGlobalGrad !== null) {
+        startColor = rawGlobalGrad.startColor || startColor;
+        endColor = rawGlobalGrad.endColor || endColor;
+        angle = rawGlobalGrad.angle ?? angle;
+      } else if (typeof rawGlobalGrad === 'string') {
+        const hexMatches = rawGlobalGrad.match(/#[0-9a-fA-F]{3,8}/g);
+        if (hexMatches && hexMatches.length >= 2) {
+          startColor = hexMatches[0];
+          endColor = hexMatches[1];
+        }
+      }
+
+      pageSettings.background_color = startColor;
+      pageSettings.background_color_b = endColor;
+      pageSettings.background_gradient_type = 'linear';
+      pageSettings.background_gradient_angle = {
+        unit: 'deg',
+        size: angle,
+      };
+      pageSettings.background_color_stop = { unit: '%', size: 0 };
+      pageSettings.background_color_b_stop = { unit: '%', size: 100 };
+    }
+
     const document: ElementorDocument = {
       version: '0.4',
       elementor_version: dir.meta?.elementorVersion || authoritative.elementorVersion,
       wp_version: authoritative.wpVersion,
       title: page?.name || 'Imported Design',
       type: 'page',
-      page_settings: {
-        template: 'elementor_canvas',
-        background_background: 'classic',
-        background_color: pageBg,
-      },
+      page_settings: pageSettings,
       content,
     };
 
@@ -151,15 +230,29 @@ export class ElementorGenerator {
 
     const pageBg = dir.globals?.colors?.background || dir.globals?.colors?.surface || '#ffffff';
     const containerMaxWidth = dir.globals?.spacing?.containerMaxWidth || 1200;
+    const isHeader = section.role === 'header' || section.role === 'navigation';
     const settings: Record<string, any> = {
       container_type: 'flex',
-      flex_direction: 'column',
+      flex_direction: isHeader ? 'row' : 'column',
       content_width: 'boxed',
       boxed_width: { unit: 'px', size: containerMaxWidth, sizes: [] },
       boxed_width_tablet: { unit: 'px', size: Math.min(768, containerMaxWidth), sizes: [] },
       boxed_width_mobile: { unit: 'px', size: 360, sizes: [] },
       _section_role: section.role,
     };
+    if (isHeader) {
+      settings.flex_justify_content = 'space-between';
+      settings.flex_align_items = 'center';
+      settings.flex_wrap = 'nowrap';
+      settings.flex_direction_tablet = 'row';
+      settings.flex_direction_mobile = 'row';
+      settings.flex_wrap_mobile = 'wrap';
+      if (!settings.padding) {
+        settings.padding = { unit: 'px', top: '16', right: '32', bottom: '16', left: '32', isLinked: false };
+        settings.padding_tablet = { unit: 'px', top: '14', right: '20', bottom: '14', left: '20', isLinked: false };
+        settings.padding_mobile = { unit: 'px', top: '12', right: '16', bottom: '12', left: '16', isLinked: false };
+      }
+    }
 
     this.applyStylesToSettings(section.styles, settings, true);
 
@@ -168,14 +261,44 @@ export class ElementorGenerator {
       this.explicitResponsiveCount++;
     }
 
-    // If section background is missing or transparent, inherit page background from globals
-    if (!settings.background_color || settings.background_color === 'transparent') {
+    const secBounds = section.canvas_bounds || dir.canvas_bounds;
+    const rawSecGrad = (section.styles as any)?.backgroundGradient;
+    const isSecGradient =
+      Boolean(rawSecGrad) ||
+      secBounds?.inner_bg_type === 'gradient' ||
+      Boolean(secBounds?.primary_hex && secBounds?.secondary_hex && secBounds.primary_hex !== secBounds.secondary_hex);
+
+    if (isSecGradient && (!settings.background_color || settings.background_color === 'transparent' || rawSecGrad)) {
+      let startColor = secBounds?.primary_hex || section.styles?.backgroundColor || pageBg;
+      let endColor = secBounds?.secondary_hex || pageBg;
+      let angle = secBounds?.gradient_angle ?? 180;
+
+      if (typeof rawSecGrad === 'object' && rawSecGrad !== null) {
+        startColor = rawSecGrad.startColor || startColor;
+        endColor = rawSecGrad.endColor || endColor;
+        angle = rawSecGrad.angle ?? angle;
+      } else if (typeof rawSecGrad === 'string') {
+        const hexMatches = rawSecGrad.match(/#[0-9a-fA-F]{3,8}/g);
+        if (hexMatches && hexMatches.length >= 2) {
+          startColor = hexMatches[0];
+          endColor = hexMatches[1];
+        }
+      }
+
+      settings.background_background = 'gradient';
+      settings.background_color = startColor;
+      settings.background_color_b = endColor;
+      settings.background_gradient_type = 'linear';
+      settings.background_gradient_angle = { unit: 'deg', size: angle };
+      settings.background_color_stop = { unit: '%', size: 0 };
+      settings.background_color_b_stop = { unit: '%', size: 100 };
+    } else if (!settings.background_color || settings.background_color === 'transparent') {
       settings.background_background = 'classic';
       settings.background_color = pageBg;
     }
 
     const elements: ElementorElement[] = [];
-    for (const child of section.children) {
+    for (const child of (section.children || [])) {
       const el = this.convertNode(child, dir);
       if (el) elements.push(el);
     }
@@ -200,13 +323,13 @@ export class ElementorGenerator {
         return this.convertContainerNode(node, dir);
 
       case 'heading':
-        return this.convertHeadingNode(node as DIRHeadingNode);
+        return this.convertHeadingNode(node as DIRHeadingNode, dir);
 
       case 'text':
-        return this.convertTextNode(node as DIRTextNode);
+        return this.convertTextNode(node as DIRTextNode, dir);
 
       case 'button':
-        return this.convertButtonNode(node as DIRButtonNode);
+        return this.convertButtonNode(node as DIRButtonNode, dir);
 
       case 'image':
         return this.convertImageNode(node as DIRImageNode, dir);
@@ -215,7 +338,7 @@ export class ElementorGenerator {
         return this.convertIconNode(node as DIRIconNode);
 
       case 'icon-text':
-        return this.convertIconBoxNode(node as DIRIconTextNode);
+        return this.convertIconBoxNode(node as DIRIconTextNode, dir);
 
       case 'list':
         return this.convertListNode(node as DIRListNode);
@@ -227,7 +350,7 @@ export class ElementorGenerator {
         return this.convertSpacerNode(node as DIRSpacerNode);
 
       case 'counter':
-        return this.convertCounterNode(node as DIRCounterNode);
+        return this.convertCounterNode(node as DIRCounterNode, dir);
 
       case 'progress-bar':
         return this.convertProgressNode(node as DIRProgressBarNode);
@@ -251,7 +374,7 @@ export class ElementorGenerator {
         return this.convertRatingNode(node);
 
       case 'link':
-        return this.convertLinkAsButton(node);
+        return this.convertLinkAsButton(node, dir);
 
       case 'badge':
         return this.convertBadgeAsHeading(node, dir);
@@ -261,23 +384,23 @@ export class ElementorGenerator {
           ...node,
           kind: 'text',
           html: `<p>${(node as any).text || ''}</p>`,
-        } as DIRTextNode);
+        } as DIRTextNode, dir);
 
       case 'input':
-        return this.convertInputNode(node);
+        return this.convertInputNode(node, dir);
 
       case 'image-box':
-        return this.convertImageBoxNode(node as any);
+        return this.convertImageBoxNode(node as any, dir);
 
       case 'testimonial':
-        return this.convertTestimonialNode(node as any);
+        return this.convertTestimonialNode(node as any, dir);
 
       case 'toggle':
         return this.convertToggleNode(node as any, dir);
 
       case 'gallery':
       case 'image-gallery':
-        return this.convertGalleryNode(node as any);
+        return this.convertGalleryNode(node as any, dir);
 
       case 'unknown':
       default:
@@ -292,20 +415,45 @@ export class ElementorGenerator {
     this.elementCount++;
 
     // Special mapping for navigation link groups: render as an inline icon-list navigation widget
-    if (
-      Array.isArray(node.children) &&
-      node.children.length > 0 &&
-      node.children.every((c: any) => c.kind === 'link')
-    ) {
+    const isNavMenu =
+      node.label === 'navigation-menu' ||
+      (node as any).role === 'navigation-menu' ||
+      (Array.isArray(node.children) &&
+        node.children.length > 0 &&
+        node.children.every((c: any) => c.kind === 'link' || c.kind === 'text' || c.kind === 'icon-text'));
+
+    if (isNavMenu) {
       this.widgetCount++;
       this.widgetsUsed.add('icon-list');
 
-      const iconList = node.children.map((c: any) => ({
+      const iconList = (node.children || []).map((c: any) => ({
         _id: generateElementId().slice(0, 7),
-        text: c.text || 'Link',
+        text: c.text || c.title || (c.kind === 'text' ? (c.html ? c.html.replace(/<[^>]*>/g, '') : '') : '') || 'Link',
         link: { url: c.url || '#' },
         selected_icon: { value: '', library: '' },
       }));
+
+      const firstChildStyles = node.children?.[0]?.styles || {};
+      const navFont = canonicalizeFontFamily(
+        firstChildStyles.fontFamily ||
+        dir?.globals?.typography?.bodyFont ||
+        dir?.globals?.typography?.headingFont ||
+        'Plus Jakarta Sans'
+      );
+      const effBg = getEffectiveBackgroundColor(node.styles, dir);
+      const isDark = isDarkColor(effBg);
+      const defaultMenuColor = isDark ? '#ffffff' : '#1e293b';
+      const menuTextColor = firstChildStyles.color || (node.styles as any)?.color || defaultMenuColor;
+      const menuFontSize = typeof firstChildStyles.fontSize === 'number' ? firstChildStyles.fontSize : 15;
+      const menuFontWeight = String(firstChildStyles.fontWeight || '500');
+
+      const menuGap = typeof node.gap === 'number' ? node.gap : 32;
+
+      // Calculate required width to ensure inline items never wrap onto multiple lines
+      const totalChars = iconList.reduce((sum: number, item: any) => sum + (item.text?.length || 0), 0);
+      const estTextWidth = totalChars * (menuFontSize * 0.72);
+      const estGapsWidth = Math.max(0, iconList.length - 1) * menuGap;
+      const estTotalWidth = Math.ceil(estTextWidth + estGapsWidth + 56);
 
       return {
         id: generateElementId(),
@@ -314,11 +462,25 @@ export class ElementorGenerator {
         settings: {
           view: 'inline',
           icon_list: iconList,
-          text_color: node.children[0]?.styles?.color || '#b0b8af',
-          space_between: { unit: 'px', size: node.gap || 28 },
+          text_color: menuTextColor,
+          space_between: { unit: 'px', size: menuGap },
+          space_between_tablet: { unit: 'px', size: Math.max(16, Math.round(menuGap * 0.75)) },
+          space_between_mobile: { unit: 'px', size: Math.max(12, Math.round(menuGap * 0.5)) },
           typography_typography: 'custom',
-          typography_font_size: { unit: 'px', size: node.children[0]?.styles?.fontSize || 14 },
-          typography_font_weight: '400',
+          typography_font_family: navFont,
+          typography_font_size: { unit: 'px', size: menuFontSize },
+          typography_font_weight: menuFontWeight,
+          align_self: 'center',
+          _element_width: 'custom',
+          _element_custom_width: { unit: 'px', size: estTotalWidth },
+          _element_width_tablet: 'initial',
+          _element_width_mobile: 'initial',
+          _flex_grow: 0,
+          _flex_shrink: 0,
+          _flex_size: 'auto',
+          width: { unit: 'px', size: estTotalWidth },
+          width_tablet: { unit: 'initial', size: '' },
+          width_mobile: { unit: 'initial', size: '' },
         },
         elements: [],
       };
@@ -328,6 +490,8 @@ export class ElementorGenerator {
     const settings: Record<string, any> = {
       container_type: isGrid ? 'grid' : 'flex',
     };
+
+    const lt = (node as any).layout_tree;
 
     if (isGrid) {
       const cols = node.columns || 3;
@@ -343,49 +507,92 @@ export class ElementorGenerator {
         unit: 'fr',
         size: 1,
       };
-      if (node.gap) {
+      const gapVal = node.gap ?? lt?.gap_px;
+      if (gapVal) {
         settings.grid_gap = {
           unit: 'px',
-          column: node.gap,
-          row: node.gap,
+          column: gapVal,
+          row: gapVal,
           isLinked: true,
         };
         settings.grid_gap_tablet = {
           unit: 'px',
-          column: Math.max(12, Math.round(node.gap * 0.75)),
-          row: Math.max(12, Math.round(node.gap * 0.75)),
+          column: Math.max(12, Math.round(gapVal * 0.75)),
+          row: Math.max(12, Math.round(gapVal * 0.75)),
           isLinked: true,
         };
         settings.grid_gap_mobile = {
           unit: 'px',
-          column: Math.max(8, Math.round(node.gap * 0.5)),
-          row: Math.max(8, Math.round(node.gap * 0.5)),
+          column: Math.max(8, Math.round(gapVal * 0.5)),
+          row: Math.max(8, Math.round(gapVal * 0.5)),
           isLinked: true,
         };
       }
       this.inferredResponsiveCount++;
     } else {
-      const flexDir = node.direction || (node.styles as any)?.flexDirection || 'column';
+      let flexDir = node.direction || (node.styles as any)?.flexDirection || lt?.direction;
+      if (!flexDir && Array.isArray(node.children) && node.children.length >= 2) {
+        // Detect side-by-side columns: if 2+ children have proportional widths <= 65%
+        const proportionalChildren = node.children.filter((c: any) => {
+          const w = c.styles?.width || c.layout_tree?.width_pct;
+          if (typeof w === 'string' && w.endsWith('%')) {
+            const v = parseFloat(w);
+            return v > 0 && v <= 65;
+          }
+          if (typeof w === 'number') {
+            return w > 0 && w <= 65;
+          }
+          return false;
+        });
+        if (proportionalChildren.length >= 2) {
+          flexDir = 'row';
+        }
+      }
+      flexDir = flexDir || 'column';
       settings.flex_direction = flexDir;
+      const isHeaderActions =
+        node.label === 'header-actions' ||
+        (node as any).role === 'header-actions' ||
+        node.id?.includes('header_actions') ||
+        node.id?.includes('nav_actions');
+
       if (flexDir === 'row') {
-        settings.flex_direction_tablet = 'column';
-        settings.flex_direction_mobile = 'column';
+        if (isHeaderActions) {
+          settings.flex_direction_tablet = 'row';
+          settings.flex_direction_mobile = 'row';
+          settings.flex_wrap = 'nowrap';
+          settings.flex_justify_content = 'flex-end';
+          settings.align_self = 'center';
+          settings.flex_grow = 0;
+          settings._flex_grow = 0;
+          settings.flex_shrink = 0;
+          settings._flex_shrink = 0;
+          settings.content_width = 'full';
+          settings.width = { unit: 'initial', size: '' };
+          settings._element_width = 'initial';
+        } else {
+          settings.flex_direction_tablet = 'column';
+          settings.flex_direction_mobile = 'column';
+        }
         this.inferredResponsiveCount++;
       }
-      const justify = node.justifyContent || (node.styles as any)?.justifyContent;
+      const justify = node.justifyContent || (node.styles as any)?.justifyContent || lt?.justify_content || lt?.justifyContent;
       if (justify) settings.flex_justify_content = this.mapJustifyContent(justify);
-      const align = node.alignItems || (node.styles as any)?.alignItems;
+      const align = node.alignItems || (node.styles as any)?.alignItems || lt?.align_items || lt?.alignItems;
       if (align) settings.flex_align_items = this.mapAlignItems(align);
       const wrap = node.wrap || (node.styles as any)?.flexWrap === 'wrap';
       if (wrap) settings.flex_wrap = 'wrap';
-      const gap = node.gap ?? (node.styles as any)?.gap;
-      if (gap !== undefined) {
+      const gap = node.gap ?? (node.styles as any)?.gap ?? (lt?.gap_px !== undefined ? Number(lt.gap_px) : undefined);
+      if (gap !== undefined && !isNaN(gap)) {
         settings.flex_gap = { unit: 'px', size: gap };
         settings.flex_gap_tablet = { unit: 'px', size: Math.max(10, Math.round(gap * 0.75)) };
         settings.flex_gap_mobile = { unit: 'px', size: Math.max(6, Math.round(gap * 0.5)) };
       }
       if ((node.styles as any)?.alignSelf) {
         settings.align_self = this.mapAlignItems((node.styles as any).alignSelf);
+      }
+      if (lt?.width_pct && !settings.width) {
+        settings.width = { unit: '%', size: Number(lt.width_pct) };
       }
     }
 
@@ -415,13 +622,13 @@ export class ElementorGenerator {
           typeof c0W === 'number' && typeof c1W === 'number' && c0W + c1W > 1400;
         const missingBoth = !c0W && !c1W;
         const hasExcessiveSingle =
-          (typeof c0W === 'number' && c0W > 850) || (typeof c1W === 'number' && c1W > 850);
+          (typeof c0W === 'number' && c0W > 650) || (typeof c1W === 'number' && c1W > 650);
 
         if (excessivePixel || missingBoth || hasExcessiveSingle) {
           if (!child0.styles) child0.styles = {};
           if (!child1.styles) child1.styles = {};
-          child0.styles.width = '55%';
-          child1.styles.width = '45%';
+          child0.styles.width = '52%';
+          child1.styles.width = '48%';
         }
       }
     }
@@ -430,13 +637,35 @@ export class ElementorGenerator {
     const hasCounterChild = Array.isArray(node.children) && node.children.some((c: any) => c.kind === 'counter');
     if (hasCounterChild && (node.direction === 'column' || (!node.direction && settings.flex_direction === 'column'))) {
       settings.flex_align_items = 'center';
+      settings.flex_justify_content = 'center';
+      for (const child of node.children) {
+        if (child.kind === 'text' || child.kind === 'heading') {
+          if (!child.styles) child.styles = {};
+          if (!child.styles.textAlign) child.styles.textAlign = 'center';
+        }
+      }
     }
+
+    const isHeaderActionsContainer =
+      node.label === 'header-actions' ||
+      (node as any).role === 'header-actions' ||
+      node.id?.includes('header_actions') ||
+      node.id?.includes('nav_actions');
 
     const elements: ElementorElement[] = [];
     if (Array.isArray(node.children)) {
       for (const child of node.children) {
         const el = this.convertNode(child, dir);
-        if (el) elements.push(el);
+        if (el) {
+          if (isHeaderActionsContainer) {
+            el.settings = el.settings || {};
+            el.settings._element_width = 'initial';
+            el.settings._flex_grow = 0;
+            el.settings._flex_shrink = 0;
+            el.settings.align_self = 'center';
+          }
+          elements.push(el);
+        }
       }
     }
 
@@ -448,24 +677,56 @@ export class ElementorGenerator {
     };
   }
 
-  private convertHeadingNode(node: DIRHeadingNode): ElementorElement {
+  private convertHeadingNode(node: DIRHeadingNode, dir?: DIRDocument): ElementorElement {
     this.widgetCount++;
     this.elementCount++;
     this.widgetsUsed.add('heading');
 
+    const typo = (node as any).typography;
+    let titleText = (node as any).html || node.text || '';
+    const accentWord = (node as any).accentWord || (node as any).accent?.text || (node as any).accent_word;
+    const accentColor =
+      (node as any).accentColor ||
+      (node as any).accent?.color ||
+      dir?.globals?.colors?.primary ||
+      dir?.globals?.colors?.accent ||
+      '#FF4625';
+
+    if (accentWord && titleText.includes(accentWord)) {
+      const replacement = `<span style="position:relative;display:inline-block;">${accentWord}<svg style="position:absolute;left:0;bottom:-6px;width:100%;height:12px;overflow:visible;" viewBox="0 0 100 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M2 7C28 2 70 2 98 8C72 5 30 5 2 9" stroke="${accentColor}" stroke-width="4.5" stroke-linecap="round"/></svg></span>`;
+      titleText = titleText.replace(accentWord, replacement);
+    }
+
     const settings: Record<string, any> = {
-      title: node.text || '',
+      title: titleText,
       header_size: `h${node.level || 2}`,
     };
 
-    if (node.styles?.textAlign) {
-      settings.align = node.styles.textAlign;
+    const align = node.styles?.textAlign || typo?.text_align || typo?.textAlign;
+    if (align) {
+      settings.align = align;
     }
-    if (node.styles?.color) {
-      settings.title_color = node.styles.color;
+    if (node.label === 'logo' || node.id?.toLowerCase().includes('logo')) {
+      settings.align = settings.align || 'left';
+      settings.align_self = 'center';
+    }
+    const color = node.styles?.color || typo?.color_hex || typo?.color;
+    if (color) {
+      settings.title_color = color;
+    } else {
+      const effBg = getEffectiveBackgroundColor(node.styles, dir);
+      const isDarkBg = isDarkColor(effBg);
+      const globalText = dir?.globals?.colors?.text;
+      const globalTextIsBright = globalText && !isDarkColor(globalText);
+      const globalTextIsDark = globalText && isDarkColor(globalText);
+      if (isDarkBg) {
+        settings.title_color = globalTextIsBright ? globalText : '#ffffff';
+      } else {
+        settings.title_color = globalTextIsDark ? globalText : (globalText || '#182135');
+      }
     }
 
-    this.applyTypographyStyles(node.styles, settings);
+    this.applyTypographyStyles(node.styles, settings, typo, 'heading', dir);
 
     if (node.responsiveOverrides) {
       this.applyResponsiveOverrides(node.responsiveOverrides, settings, false);
@@ -481,23 +742,37 @@ export class ElementorGenerator {
     };
   }
 
-  private convertTextNode(node: DIRTextNode): ElementorElement {
+  private convertTextNode(node: DIRTextNode, dir?: DIRDocument): ElementorElement {
     this.widgetCount++;
     this.elementCount++;
     this.widgetsUsed.add('text-editor');
 
+    const typo = (node as any).typography;
     const settings: Record<string, any> = {
       editor: node.html || node.text || '<p></p>',
     };
 
-    if (node.styles?.textAlign) {
-      settings.align = node.styles.textAlign;
+    const align = node.styles?.textAlign || typo?.text_align || typo?.textAlign;
+    if (align) {
+      settings.align = align;
     }
-    if (node.styles?.color) {
-      settings.text_color = node.styles.color;
+    const color = node.styles?.color || typo?.color_hex || typo?.color;
+    if (color) {
+      settings.text_color = color;
+    } else {
+      const effBg = getEffectiveBackgroundColor(node.styles, dir);
+      const isDarkBg = isDarkColor(effBg);
+      const globalText = dir?.globals?.colors?.text;
+      const globalTextIsBright = globalText && !isDarkColor(globalText);
+      const globalTextIsDark = globalText && isDarkColor(globalText);
+      if (isDarkBg) {
+        settings.text_color = globalTextIsBright ? globalText : '#e2e8f0';
+      } else {
+        settings.text_color = globalTextIsDark ? globalText : (globalText || '#475569');
+      }
     }
 
-    this.applyTypographyStyles(node.styles, settings);
+    this.applyTypographyStyles(node.styles, settings, typo, 'body', dir);
 
     if (node.responsiveOverrides) {
       this.applyResponsiveOverrides(node.responsiveOverrides, settings, false);
@@ -513,28 +788,68 @@ export class ElementorGenerator {
     };
   }
 
-  private convertButtonNode(node: DIRButtonNode): ElementorElement {
+  private convertButtonNode(node: DIRButtonNode, dir?: DIRDocument): ElementorElement {
     this.widgetCount++;
     this.elementCount++;
     this.widgetsUsed.add('button');
 
+    const typo = (node as any).typography;
     const settings: Record<string, any> = {
       text: node.text || 'Click here',
       link: { url: node.url || '#', is_external: '', nofollow: '' },
       size: node.size === 'large' ? 'lg' : node.size === 'small' ? 'sm' : 'md',
     };
 
-    if (node.styles?.backgroundColor) {
-      settings.background_color = node.styles.backgroundColor;
+    const rawBtnGrad = (node.styles as any)?.backgroundGradient;
+    const btnBg = node.styles?.backgroundColor || dir?.globals?.colors?.primary || dir?.globals?.colors?.accent;
+
+    if (rawBtnGrad) {
+      let startColor = btnBg || '#deb285';
+      let endColor = '#deb285';
+      let angle = 90;
+      if (typeof rawBtnGrad === 'object' && rawBtnGrad !== null) {
+        startColor = rawBtnGrad.startColor || startColor;
+        endColor = rawBtnGrad.endColor || endColor;
+        angle = rawBtnGrad.angle ?? angle;
+      } else if (typeof rawBtnGrad === 'string') {
+        const hexMatches = rawBtnGrad.match(/#[0-9a-fA-F]{3,8}/g);
+        if (hexMatches && hexMatches.length >= 2) {
+          startColor = hexMatches[0];
+          endColor = hexMatches[1];
+        }
+      }
+      settings.background_background = 'gradient';
+      settings.background_color = startColor;
+      settings.background_color_b = endColor;
+      settings.background_gradient_angle = { unit: 'deg', size: angle };
+    } else if (btnBg) {
+      settings.background_color = btnBg;
     }
-    if ((node as any).variant === 'outline' && !node.styles?.backgroundColor) {
+
+    if ((node as any).variant === 'outline' && !node.styles?.backgroundColor && !rawBtnGrad) {
       settings.background_color = 'transparent';
     }
-    if (node.styles?.color) {
-      settings.button_text_color = node.styles.color;
+    const color = node.styles?.color || typo?.color_hex || typo?.color;
+    if (color) {
+      settings.button_text_color = color;
+    } else if (settings.background_color) {
+      settings.button_text_color = isDarkColor(settings.background_color) ? '#ffffff' : '#060b05';
+    } else {
+      settings.button_text_color = '#ffffff';
     }
     if (node.styles?.borderRadius) {
       settings.border_radius = this.mapBorderRadius(node.styles.borderRadius);
+    } else {
+      const isPill = node.text?.toLowerCase().includes('get started') || (node as any).variant === 'pill';
+      const defaultRadius = isPill ? 50 : 8;
+      settings.border_radius = {
+        unit: 'px',
+        top: String(defaultRadius),
+        right: String(defaultRadius),
+        bottom: String(defaultRadius),
+        left: String(defaultRadius),
+        isLinked: true,
+      };
     }
     if (node.styles?.borderWidth || (node as any).variant === 'outline') {
       settings.border_border = node.styles?.borderStyle || 'solid';
@@ -557,11 +872,16 @@ export class ElementorGenerator {
       settings.button_padding_mobile = this.mapScaledSpacing(node.styles.padding, 0.65, 0.6, 10);
       this.inferredResponsiveCount++;
     }
-    if (node.styles?.textAlign) {
-      settings.align = node.styles.textAlign;
+    const align = node.styles?.textAlign || typo?.text_align || typo?.textAlign;
+    if (align) {
+      settings.align = align;
     }
+    settings.align_self = 'center';
+    settings._element_width = 'initial';
+    settings._flex_grow = 0;
+    settings._flex_shrink = 0;
 
-    this.applyTypographyStyles(node.styles, settings);
+    this.applyTypographyStyles(node.styles, settings, typo, 'button', dir);
 
     if (node.responsiveOverrides) {
       this.applyResponsiveOverrides(node.responsiveOverrides, settings, false);
@@ -582,11 +902,13 @@ export class ElementorGenerator {
     this.elementCount++;
     this.widgetsUsed.add('image');
 
-    let imageUrl = (node as any).url || '';
-    if (!imageUrl && node.assetId) {
+    let imageUrl = (node as any).url || (node as any).imageUrl || '';
+    let imagePath = (node as any).path || '';
+    if (node.assetId) {
       const asset = dir.assets?.find((a) => a.id === node.assetId);
       if (asset) {
-        imageUrl = asset.placeholder || (asset as any).url || '';
+        if (!imageUrl) imageUrl = asset.placeholder || (asset as any).url || '';
+        if (!imagePath && asset.path) imagePath = asset.path;
       }
     }
 
@@ -594,14 +916,23 @@ export class ElementorGenerator {
       const firstValidAsset = dir.assets?.find((a) => a.placeholder || (a as any).url);
       if (firstValidAsset) {
         imageUrl = firstValidAsset.placeholder || (firstValidAsset as any).url;
+        if (!imagePath && firstValidAsset.path) imagePath = firstValidAsset.path;
       } else {
         const altText = encodeURIComponent(node.alt || 'Image');
         imageUrl = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"><rect width="100%" height="100%" fill="%231e293b"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%2394a3b8" font-family="sans-serif" font-size="16">${altText}</text></svg>`;
       }
     }
 
+    const imageObj: Record<string, any> = {
+      url: imageUrl || '',
+      id: (node as any).assetId || '',
+    };
+    if (imagePath) {
+      imageObj.path = imagePath;
+    }
+
     const settings: Record<string, any> = {
-      image: { url: imageUrl || '', id: (node as any).assetId || '' },
+      image: imageObj,
       image_size: 'full',
       align: 'center',
     };
@@ -610,9 +941,36 @@ export class ElementorGenerator {
       settings.caption = node.alt;
       settings.alt_text = node.alt;
     }
-    if (node.styles?.width) {
+    const isLogo = node.label === 'logo' ||
+      node.id?.toLowerCase().includes('logo') ||
+      (node as any).assetId?.toLowerCase().includes('logo') ||
+      (node.alt && node.alt.toLowerCase().includes('logo'));
+
+    if (isLogo) {
+      settings.align = 'left';
+      settings.image_fit = 'contain';
+      settings.align_self = 'center';
+      settings._element_width = 'initial';
+      settings._flex_grow = 0;
+      settings._flex_shrink = 0;
+      settings.flex_grow = 0;
+      settings.flex_shrink = 0;
+      const rawWidth = typeof node.styles?.width === 'number' && node.styles.width > 0
+        ? node.styles.width
+        : (typeof node.styles?.width === 'string' && !node.styles.width.endsWith('%') ? parseFloat(node.styles.width) : 150);
+      const logoWidth = Math.max(50, Math.min(220, rawWidth || 150));
+      settings.width = { unit: 'px', size: logoWidth };
+      settings.width_tablet = { unit: 'px', size: Math.max(40, Math.min(180, Math.round(logoWidth * 0.9))) };
+      settings.width_mobile = { unit: 'px', size: Math.max(40, Math.min(140, Math.round(logoWidth * 0.8))) };
+      this.inferredResponsiveCount++;
+    } else if (node.styles?.width) {
       if (typeof node.styles.width === 'number') {
-        if (node.styles.width > 480) {
+        if (node.styles.width <= 100 && node.styles.width > 0) {
+          // Numbers <= 100 on image inside container are percentage width (e.g. 100 -> 100%)
+          settings.width = { unit: '%', size: node.styles.width };
+          settings.width_tablet = { unit: '%', size: 100 };
+          settings.width_mobile = { unit: '%', size: 100 };
+        } else if (node.styles.width > 480) {
           // Large images inside columns scale to 100% of their container
           settings.width = { unit: '%', size: 100 };
           settings.width_tablet = { unit: '%', size: 100 };
@@ -635,9 +993,13 @@ export class ElementorGenerator {
     if (node.styles?.borderRadius) {
       settings.border_radius = this.mapBorderRadius(node.styles.borderRadius);
     }
-    if (node.styles?.height && typeof node.styles.height === 'number') {
-      // Do not impose rigid fixed pixel heights on large portrait/hero images
-      if (node.styles.height <= 600) {
+    if (isLogo) {
+      const rawHeight = typeof node.styles?.height === 'number' && node.styles.height > 0 ? node.styles.height : 44;
+      const logoHeight = Math.max(24, Math.min(52, rawHeight));
+      settings.height = { unit: 'px', size: logoHeight };
+    } else if (node.styles?.height && typeof node.styles.height === 'number') {
+      // Do not impose rigid fixed pixel heights on responsive hero images when width is %
+      if (node.styles.height <= 600 && (!settings.width || settings.width.unit !== '%')) {
         settings.height = { unit: 'px', size: node.styles.height };
       }
     }
@@ -697,7 +1059,7 @@ export class ElementorGenerator {
     };
   }
 
-  private convertIconBoxNode(node: DIRIconTextNode): ElementorElement {
+  private convertIconBoxNode(node: DIRIconTextNode, dir?: DIRDocument): ElementorElement {
     this.widgetCount++;
     this.elementCount++;
     this.widgetsUsed.add('icon-box');
@@ -712,7 +1074,15 @@ export class ElementorGenerator {
       position: 'top',
     };
 
-    if (node.styles?.color) settings.title_color = node.styles.color;
+    const effBg = getEffectiveBackgroundColor(node.styles, dir);
+    const titleColor = node.styles?.color || (isDarkColor(effBg) ? '#ffffff' : (dir?.globals?.colors?.text || '#182135'));
+    settings.title_color = titleColor;
+
+    const boxFont = canonicalizeFontFamily(node.styles?.fontFamily || dir?.globals?.typography?.headingFont);
+    if (boxFont) {
+      settings.title_typography_typography = 'custom';
+      settings.title_typography_font_family = boxFont;
+    }
 
     return {
       id: generateElementId(),
@@ -784,7 +1154,7 @@ export class ElementorGenerator {
     };
   }
 
-  private convertCounterNode(node: DIRCounterNode): ElementorElement {
+  private convertCounterNode(node: DIRCounterNode, dir?: DIRDocument): ElementorElement {
     this.widgetCount++;
     this.elementCount++;
     this.widgetsUsed.add('counter');
@@ -804,9 +1174,17 @@ export class ElementorGenerator {
       title: node.title || '',
     };
 
-    if (node.styles?.color) {
-      settings.number_color = node.styles.color;
-      settings.title_color = node.styles.color;
+    const effBg = getEffectiveBackgroundColor(node.styles, dir);
+    const counterColor = node.styles?.color || (isDarkColor(effBg) ? '#ffffff' : (dir?.globals?.colors?.text || '#182135'));
+    settings.number_color = counterColor;
+    settings.title_color = counterColor;
+
+    const counterFont = canonicalizeFontFamily(node.styles?.fontFamily || dir?.globals?.typography?.headingFont);
+    if (counterFont) {
+      settings.typography_number_typography = 'custom';
+      settings.typography_number_font_family = counterFont;
+      settings.typography_title_typography = 'custom';
+      settings.typography_title_font_family = counterFont;
     }
 
     if (node.styles?.fontSize) {
@@ -849,17 +1227,27 @@ export class ElementorGenerator {
       (typeof node.styles?.borderRadius === 'number' && node.styles.borderRadius >= 50);
 
     if (isCircular && node.styles?.backgroundColor) {
-      const circleSize = 90;
+      const circleSize = 110;
       settings.duration = 0;
+      settings.align = 'center';
+      if (!settings.typography_number_font_size) {
+        settings.typography_number_typography = 'custom';
+        settings.typography_number_font_size = { unit: 'px', size: 34 };
+      }
       return {
         id: generateElementId(),
         elType: 'container',
         settings: {
           container_type: 'flex',
-          content_width: 'boxed',
+          content_width: 'full',
           width: { unit: 'px', size: circleSize },
-          custom_height: { unit: 'px', size: circleSize },
+          width_tablet: { unit: 'px', size: Math.max(80, circleSize - 10) },
+          width_mobile: { unit: 'px', size: Math.max(70, circleSize - 20) },
+          min_height: { unit: 'px', size: circleSize },
+          min_height_tablet: { unit: 'px', size: Math.max(80, circleSize - 10) },
+          min_height_mobile: { unit: 'px', size: Math.max(70, circleSize - 20) },
           height: 'min-height',
+          custom_height: { unit: 'px', size: circleSize },
           border_radius: { unit: '%', top: '50', right: '50', bottom: '50', left: '50', isLinked: true },
           background_background: 'classic',
           background_color: node.styles.backgroundColor,
@@ -1036,25 +1424,36 @@ export class ElementorGenerator {
     };
   }
 
-  private convertLinkAsButton(node: any): ElementorElement {
+  private convertLinkAsButton(node: any, dir?: DIRDocument): ElementorElement {
     this.widgetCount++;
     this.elementCount++;
     this.widgetsUsed.add('button');
+
+    const typo = (node as any).typography;
+    const effBg = getEffectiveBackgroundColor(node.styles, dir);
+    const defaultColor = isDarkColor(effBg) ? '#ffffff' : (dir?.globals?.colors?.text || '#182135');
+    const color = node.styles?.color || typo?.color_hex || defaultColor;
+
+    const settings: Record<string, any> = {
+      text: node.text || 'Link',
+      link: { url: node.url || '#', is_external: '', nofollow: '' },
+      button_type: 'default',
+      background_color: 'transparent',
+      button_text_color: color,
+      button_padding: { top: '0', right: '0', bottom: '0', left: '0', unit: 'px', isLinked: true },
+    };
+
+    this.applyTypographyStyles(node.styles, settings, typo, 'button', dir);
+    if (!settings.typography_font_size) {
+      settings.typography_font_size = { unit: 'px', size: 14 };
+      settings.typography_typography = 'custom';
+    }
 
     return {
       id: generateElementId(),
       elType: 'widget',
       widgetType: 'button',
-      settings: {
-        text: node.text || 'Link',
-        link: { url: node.url || '#', is_external: '', nofollow: '' },
-        button_type: 'default',
-        background_color: 'transparent',
-        button_text_color: node.styles?.color || '#ffffff',
-        button_padding: { top: '0', right: '0', bottom: '0', left: '0', unit: 'px', isLinked: true },
-        typography_typography: 'custom',
-        typography_font_size: { unit: 'px', size: node.styles?.fontSize || 14 },
-      },
+      settings,
       elements: [],
     };
   }
@@ -1069,6 +1468,8 @@ export class ElementorGenerator {
     const fontSize = node.styles?.fontSize || 13;
     const padding = node.styles?.padding || { top: 6, bottom: 6, left: 16, right: 16 };
     const borderRadius = node.styles?.borderRadius || 9999;
+
+    const badgeFont = canonicalizeFontFamily(dir?.globals?.typography?.bodyFont || dir?.globals?.typography?.headingFont || 'Plus Jakarta Sans');
 
     return {
       id: generateElementId(),
@@ -1096,6 +1497,7 @@ export class ElementorGenerator {
             title_color: textColor,
             align: 'center',
             typography_typography: 'custom',
+            typography_font_family: badgeFont,
             typography_font_size: { unit: 'px', size: fontSize },
             typography_font_weight: '600',
           },
@@ -1105,20 +1507,36 @@ export class ElementorGenerator {
     };
   }
 
-  private convertInputNode(node: any): ElementorElement {
+  private convertInputNode(node: any, dir?: DIRDocument): ElementorElement {
     this.widgetCount++;
     this.elementCount++;
     this.widgetsUsed.add('html');
 
     const formDetails = node.form_details;
     const placeholder = formDetails?.placeholder || node.placeholder || 'Enter your email...';
-    const bg = formDetails?.background_hex || node.styles?.backgroundColor || 'rgba(255, 255, 255, 0.08)';
-    const color = node.styles?.color || '#ffffff';
-    const borderRadius = formDetails?.border_radius_px ?? (typeof node.styles?.borderRadius === 'number' ? node.styles.borderRadius : 50);
+    const effBg = getEffectiveBackgroundColor(node.styles, dir);
+    const isDark = isDarkColor(effBg);
+
+    const defaultBg = isDark ? 'rgba(255, 255, 255, 0.08)' : '#ffffff';
+    const defaultColor = isDark ? '#f8fafc' : '#1e293b';
+    const defaultBorder = isDark ? '1px solid rgba(255, 255, 255, 0.15)' : '1px solid #cbd5e1';
+
+    const bg = formDetails?.background_hex || node.styles?.backgroundColor || defaultBg;
+    const color = node.styles?.color || defaultColor;
+
+    let borderRadius = 50;
+    if (formDetails?.border_radius_px !== undefined) {
+      borderRadius = formDetails.border_radius_px;
+    } else if (typeof node.styles?.borderRadius === 'number') {
+      borderRadius = node.styles.borderRadius;
+    } else if (node.styles?.borderRadius && typeof node.styles.borderRadius === 'object') {
+      borderRadius = node.styles.borderRadius.topLeft || node.styles.borderRadius.topRight || 50;
+    }
+
     const fontSize = node.styles?.fontSize || 14;
 
     const html = `<div class="elementor-custom-input-wrap" style="width: 100%;">
-  <input type="text" placeholder="${placeholder}" style="width: 100%; background: ${bg}; color: ${color}; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: ${borderRadius}px; padding: 12px 20px; font-size: ${fontSize}px; outline: none; box-sizing: border-box;" />
+  <input type="email" placeholder="${placeholder}" style="width: 100%; background: ${bg}; color: ${color}; border: ${defaultBorder}; border-radius: ${borderRadius}px; padding: 14px 22px; font-size: ${fontSize}px; outline: none; box-sizing: border-box;" />
 </div>`;
 
     return {
@@ -1132,16 +1550,31 @@ export class ElementorGenerator {
     };
   }
 
-  private convertImageBoxNode(node: any): ElementorElement {
+  private convertImageBoxNode(node: any, dir?: DIRDocument): ElementorElement {
     this.widgetCount++;
     this.elementCount++;
     this.widgetsUsed.add('image-box');
 
+    let imageUrl = (node as any).url || (node as any).imageUrl || '';
+    let imagePath = (node as any).path || '';
+    if (node.assetId && dir?.assets) {
+      const asset = dir.assets.find((a) => a.id === node.assetId);
+      if (asset) {
+        if (!imageUrl) imageUrl = asset.placeholder || (asset as any).url || '';
+        if (!imagePath && asset.path) imagePath = asset.path;
+      }
+    }
+
+    const imageObj: Record<string, any> = {
+      url: imageUrl,
+      id: (node as any).assetId || '',
+    };
+    if (imagePath) {
+      imageObj.path = imagePath;
+    }
+
     const settings: Record<string, any> = {
-      image: {
-        url: (node as any).url || (node as any).imageUrl || '',
-        id: (node as any).assetId || '',
-      },
+      image: imageObj,
       title_text: node.title || node.text || 'Feature title',
       description_text: node.description || '',
       title_size: 'h3',
@@ -1162,10 +1595,28 @@ export class ElementorGenerator {
     };
   }
 
-  private convertTestimonialNode(node: any): ElementorElement {
+  private convertTestimonialNode(node: any, dir?: DIRDocument): ElementorElement {
     this.widgetCount++;
     this.elementCount++;
     this.widgetsUsed.add('testimonial');
+
+    let imageUrl = (node as any).imageUrl || (node as any).url || '';
+    let imagePath = (node as any).path || '';
+    if (node.assetId && dir?.assets) {
+      const asset = dir.assets.find((a) => a.id === node.assetId);
+      if (asset) {
+        if (!imageUrl) imageUrl = asset.placeholder || (asset as any).url || '';
+        if (!imagePath && asset.path) imagePath = asset.path;
+      }
+    }
+
+    const imageObj: Record<string, any> = {
+      url: imageUrl,
+      id: (node as any).assetId || '',
+    };
+    if (imagePath) {
+      imageObj.path = imagePath;
+    }
 
     return {
       id: generateElementId(),
@@ -1175,7 +1626,7 @@ export class ElementorGenerator {
         testimonial_content: node.content || node.text || '',
         testimonial_name: node.name || node.author || 'Author',
         testimonial_job: node.job || node.role || '',
-        testimonial_image: { url: node.imageUrl || '', id: '' },
+        testimonial_image: imageObj,
         testimonial_alignment: node.styles?.textAlign || 'center',
         image_size: 'thumbnail',
       },
@@ -1206,15 +1657,28 @@ export class ElementorGenerator {
     };
   }
 
-  private convertGalleryNode(node: any): ElementorElement {
+  private convertGalleryNode(node: any, dir?: DIRDocument): ElementorElement {
     this.widgetCount++;
     this.elementCount++;
     this.widgetsUsed.add('image-gallery');
 
-    const gallery = (node.images || node.children || []).map((img: any) => ({
-      url: img.url || img.imageUrl || '',
-      id: img.assetId || '',
-    }));
+    const gallery = (node.images || node.children || []).map((img: any) => {
+      let url = img.url || img.imageUrl || '';
+      let path = img.path || '';
+      if (img.assetId && dir?.assets) {
+        const asset = dir.assets.find((a) => a.id === img.assetId);
+        if (asset) {
+          if (!url) url = asset.placeholder || (asset as any).url || '';
+          if (!path && asset.path) path = asset.path;
+        }
+      }
+      const item: Record<string, any> = {
+        url,
+        id: img.assetId || '',
+      };
+      if (path) item.path = path;
+      return item;
+    });
 
     return {
       id: generateElementId(),
@@ -1251,7 +1715,32 @@ export class ElementorGenerator {
   private applyStylesToSettings(styles: DIRStyles | undefined, settings: Record<string, any>, isContainer: boolean): void {
     if (!styles) return;
 
-    if (styles.backgroundColor) {
+    const rawGrad = (styles as any)?.backgroundGradient;
+    if (rawGrad && isContainer) {
+      let startColor = styles.backgroundColor || '#1b2248';
+      let endColor = '#141b3c';
+      let angle = 180;
+
+      if (typeof rawGrad === 'object' && rawGrad !== null) {
+        startColor = rawGrad.startColor || startColor;
+        endColor = rawGrad.endColor || endColor;
+        angle = rawGrad.angle ?? angle;
+      } else if (typeof rawGrad === 'string') {
+        const hexMatches = rawGrad.match(/#[0-9a-fA-F]{3,8}/g);
+        if (hexMatches && hexMatches.length >= 2) {
+          startColor = hexMatches[0];
+          endColor = hexMatches[1];
+        }
+      }
+
+      settings.background_background = 'gradient';
+      settings.background_color = startColor;
+      settings.background_color_b = endColor;
+      settings.background_gradient_type = 'linear';
+      settings.background_gradient_angle = { unit: 'deg', size: angle };
+      settings.background_color_stop = { unit: '%', size: 0 };
+      settings.background_color_b_stop = { unit: '%', size: 100 };
+    } else if (styles.backgroundColor) {
       if (isContainer) {
         settings.background_background = 'classic';
         settings.background_color = styles.backgroundColor;
@@ -1308,12 +1797,28 @@ export class ElementorGenerator {
           this.inferredResponsiveCount++;
         }
       } else if (typeof styles.width === 'number') {
-        settings.width = { unit: 'px', size: styles.width };
-        if (styles.width > 360) {
-          settings.width_tablet = { unit: 'px', size: Math.min(680, styles.width) };
+        if (styles.width > 650) {
+          // Large pixel widths from image canvas coordinates scale proportionally to avoid layout blowout
+          settings.width = { unit: '%', size: 50 };
+          settings.width_tablet = { unit: '%', size: 100 };
           settings.width_mobile = { unit: '%', size: 100 };
-          this.inferredResponsiveCount++;
+        } else if (isContainer && styles.width <= 100 && styles.width > 0) {
+          // Numbers <= 100 on containers represent proportional percentage width (e.g. 50 -> 50%, 45 -> 45%)
+          if (styles.width === 100) {
+            settings.content_width = 'full';
+          } else {
+            settings.width = { unit: '%', size: styles.width };
+            settings.width_tablet = { unit: '%', size: 100 };
+            settings.width_mobile = { unit: '%', size: 100 };
+          }
+        } else {
+          settings.width = { unit: 'px', size: styles.width };
+          if (styles.width > 360) {
+            settings.width_tablet = { unit: 'px', size: Math.min(680, styles.width) };
+            settings.width_mobile = { unit: '%', size: 100 };
+          }
         }
+        this.inferredResponsiveCount++;
       }
     }
 
@@ -1327,19 +1832,28 @@ export class ElementorGenerator {
     const minH = styles.minHeight ?? (isContainer ? styles.height : undefined);
     if (minH !== undefined) {
       if (typeof minH === 'number') {
-        const clampedH = Math.min(800, Math.max(0, minH));
-        settings.height = 'min-height';
-        settings.custom_height = { unit: 'px', size: clampedH, sizes: [] };
-        if (clampedH > 400) {
-          settings.custom_height_tablet = { unit: 'px', size: Math.round(clampedH * 0.8), sizes: [] };
-          settings.custom_height_mobile = { unit: 'px', size: Math.max(280, Math.round(clampedH * 0.65)), sizes: [] };
-          this.inferredResponsiveCount++;
+        // Do not force rigid pixel heights if minH is excessively large (> 650px)
+        if (minH <= 650) {
+          const clampedH = Math.min(650, Math.max(0, minH));
+          settings.height = 'min-height';
+          settings.min_height = { unit: 'px', size: clampedH, sizes: [] };
+          settings.custom_height = { unit: 'px', size: clampedH, sizes: [] };
+          if (clampedH > 400) {
+            settings.min_height_tablet = { unit: 'px', size: Math.round(clampedH * 0.8), sizes: [] };
+            settings.custom_height_tablet = { unit: 'px', size: Math.round(clampedH * 0.8), sizes: [] };
+            settings.min_height_mobile = { unit: 'px', size: Math.max(280, Math.round(clampedH * 0.65)), sizes: [] };
+            settings.custom_height_mobile = { unit: 'px', size: Math.max(280, Math.round(clampedH * 0.65)), sizes: [] };
+            this.inferredResponsiveCount++;
+          }
         }
       } else if (typeof minH === 'string' && minH.endsWith('vh')) {
         const val = parseInt(minH, 10);
         settings.height = 'min-height';
+        settings.min_height = { unit: 'vh', size: val, sizes: [] };
         settings.custom_height = { unit: 'vh', size: val, sizes: [] };
+        settings.min_height_tablet = { unit: 'vh', size: Math.max(50, Math.round(val * 0.9)), sizes: [] };
         settings.custom_height_tablet = { unit: 'vh', size: Math.max(50, Math.round(val * 0.9)), sizes: [] };
+        settings.min_height_mobile = { unit: 'vh', size: Math.max(40, Math.round(val * 0.8)), sizes: [] };
         settings.custom_height_mobile = { unit: 'vh', size: Math.max(40, Math.round(val * 0.8)), sizes: [] };
         this.inferredResponsiveCount++;
       }
@@ -1347,58 +1861,89 @@ export class ElementorGenerator {
 
     if (styles.backgroundImage && isContainer) {
       settings.background_background = 'classic';
-      settings.background_image = { url: styles.backgroundImage, id: '' };
+      const bgImageObj: Record<string, any> = {
+        url: styles.backgroundImage,
+        id: (styles as any).backgroundImageAssetId || '',
+      };
+      if ((styles as any).backgroundImagePath) {
+        bgImageObj.path = (styles as any).backgroundImagePath;
+      }
+      settings.background_image = bgImageObj;
       if (styles.backgroundPosition) settings.background_position = styles.backgroundPosition;
       if (styles.backgroundSize) settings.background_size = styles.backgroundSize;
       settings.background_repeat = 'no-repeat';
     }
   }
 
-  private applyTypographyStyles(styles: DIRStyles | undefined, settings: Record<string, any>): void {
-    if (!styles) return;
+  private applyTypographyStyles(
+    styles: DIRStyles | undefined,
+    settings: Record<string, any>,
+    typography?: Record<string, any>,
+    fallbackKind?: 'heading' | 'body' | 'button',
+    dir?: DIRDocument
+  ): void {
+    const rawFont = styles?.fontFamily || typography?.font_family_guess || typography?.font_family;
+    const globalFont = fallbackKind === 'heading'
+      ? dir?.globals?.typography?.headingFont
+      : (fallbackKind === 'body' || fallbackKind === 'button'
+          ? dir?.globals?.typography?.bodyFont
+          : undefined);
+    const anyGlobalFont = dir?.globals?.typography?.fontFamilies?.[0] || dir?.globals?.typography?.headingFont || dir?.globals?.typography?.bodyFont;
+
+    const candidateFont = rawFont || globalFont || anyGlobalFont || (fallbackKind === 'heading' ? 'Plus Jakarta Sans' : 'Inter');
+    const canonicalFont = canonicalizeFontFamily(candidateFont);
+    const rawFontSize = styles?.fontSize ?? (typography?.font_size_px !== undefined ? Number(typography.font_size_px) : undefined);
+    const fontSize = typeof rawFontSize === 'number' && !isNaN(rawFontSize) ? rawFontSize : undefined;
+    const rawFontWeight = styles?.fontWeight ?? typography?.font_weight;
+    const fontWeight = rawFontWeight !== undefined ? String(rawFontWeight) : undefined;
+    const rawLineHeight = styles?.lineHeight ?? typography?.line_height_em ?? typography?.line_height;
+    const lineHeight = rawLineHeight !== undefined ? (typeof rawLineHeight === 'number' ? rawLineHeight : parseFloat(String(rawLineHeight))) : undefined;
+    const rawLetterSpacing = styles?.letterSpacing ?? (typography?.letter_spacing_px !== undefined ? Number(typography.letter_spacing_px) : undefined);
+    const letterSpacing = typeof rawLetterSpacing === 'number' && !isNaN(rawLetterSpacing) ? rawLetterSpacing : undefined;
+    const textTransform = styles?.textTransform || typography?.text_transform;
+    const textDecoration = styles?.textDecoration || typography?.text_decoration;
 
     let hasTypo = false;
-    if (styles.fontFamily) {
-      settings.typography_font_family = styles.fontFamily;
+    if (canonicalFont) {
+      settings.typography_font_family = canonicalFont;
       hasTypo = true;
     }
-    if (styles.fontSize) {
-      settings.typography_font_size = { unit: 'px', size: styles.fontSize };
+    if (fontSize !== undefined) {
+      settings.typography_font_size = { unit: 'px', size: fontSize };
       hasTypo = true;
-      if (styles.fontSize >= 44) {
-        settings.typography_font_size_tablet = { unit: 'px', size: Math.round(styles.fontSize * 0.8) };
-        settings.typography_font_size_mobile = { unit: 'px', size: Math.max(24, Math.round(styles.fontSize * 0.6)) };
+      if (fontSize >= 44) {
+        settings.typography_font_size_tablet = { unit: 'px', size: Math.round(fontSize * 0.8) };
+        settings.typography_font_size_mobile = { unit: 'px', size: Math.max(24, Math.round(fontSize * 0.6)) };
         this.inferredResponsiveCount++;
-      } else if (styles.fontSize >= 28) {
-        settings.typography_font_size_tablet = { unit: 'px', size: Math.round(styles.fontSize * 0.85) };
-        settings.typography_font_size_mobile = { unit: 'px', size: Math.max(20, Math.round(styles.fontSize * 0.72)) };
+      } else if (fontSize >= 28) {
+        settings.typography_font_size_tablet = { unit: 'px', size: Math.round(fontSize * 0.85) };
+        settings.typography_font_size_mobile = { unit: 'px', size: Math.max(20, Math.round(fontSize * 0.72)) };
         this.inferredResponsiveCount++;
-      } else if (styles.fontSize >= 18) {
-        settings.typography_font_size_mobile = { unit: 'px', size: Math.max(15, Math.round(styles.fontSize * 0.88)) };
+      } else if (fontSize >= 18) {
+        settings.typography_font_size_mobile = { unit: 'px', size: Math.max(15, Math.round(fontSize * 0.88)) };
         this.inferredResponsiveCount++;
       }
     }
-    if (styles.fontWeight) {
-      settings.typography_font_weight = String(styles.fontWeight);
+    if (fontWeight !== undefined) {
+      settings.typography_font_weight = fontWeight;
       hasTypo = true;
     }
-    if (styles.lineHeight) {
-      const lh = typeof styles.lineHeight === 'number' ? styles.lineHeight : 1.5;
-      settings.typography_line_height = { unit: 'em', size: lh };
-      settings.typography_line_height_tablet = { unit: 'em', size: Math.max(1.2, Math.round(lh * 0.95 * 10) / 10) };
-      settings.typography_line_height_mobile = { unit: 'em', size: Math.max(1.2, Math.round(lh * 0.9 * 10) / 10) };
+    if (lineHeight !== undefined && !isNaN(lineHeight)) {
+      settings.typography_line_height = { unit: 'em', size: lineHeight };
+      settings.typography_line_height_tablet = { unit: 'em', size: Math.max(1.2, Math.round(lineHeight * 0.95 * 10) / 10) };
+      settings.typography_line_height_mobile = { unit: 'em', size: Math.max(1.2, Math.round(lineHeight * 0.9 * 10) / 10) };
       hasTypo = true;
     }
-    if (styles.letterSpacing !== undefined) {
-      settings.typography_letter_spacing = { unit: 'px', size: styles.letterSpacing };
+    if (letterSpacing !== undefined) {
+      settings.typography_letter_spacing = { unit: 'px', size: letterSpacing };
       hasTypo = true;
     }
-    if (styles.textTransform) {
-      settings.typography_text_transform = styles.textTransform;
+    if (textTransform) {
+      settings.typography_text_transform = textTransform;
       hasTypo = true;
     }
-    if (styles.textDecoration) {
-      settings.typography_text_decoration = styles.textDecoration;
+    if (textDecoration) {
+      settings.typography_text_decoration = textDecoration;
       hasTypo = true;
     }
 

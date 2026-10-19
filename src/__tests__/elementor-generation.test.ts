@@ -9,6 +9,8 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createRequire } from 'module';
 import type { DIRDocument } from '../modules/dir/types.js';
+import { ElementorGenerator } from '../modules/elementor/generator.js';
+import { normalizeDIR } from '../modules/dir/normalizer.js';
 
 const require = createRequire(import.meta.url);
 const sampleDir = require('../__fixtures__/sample-dir.json');
@@ -220,6 +222,186 @@ describe('Elementor Generation', () => {
       expect(roles).toContain('feature');
       expect(roles).toContain('cta');
       expect(roles).toContain('footer');
+    });
+  });
+
+  describe('Image Path and URL Preservation in Elementor Output', () => {
+    it('should preserve url and path in image widget settings', () => {
+      const testDir = {
+        version: '1.0.0',
+        meta: {
+          sourceImageHash: 'test-hash',
+          sourceWidth: 1440,
+          sourceHeight: 900,
+          analysisProvider: 'test',
+          analysisModel: 'test-model',
+          analysisTimestamp: new Date().toISOString(),
+          confidenceScore: 0.95,
+          schemaVersion: '1.0.0',
+          promptVersion: '1.0.0',
+        },
+        assets: [
+          {
+            id: 'asset-hero-1',
+            type: 'image',
+            role: 'hero',
+            confidence: 0.95,
+            path: 'projects/p1/assets/asset-hero-1.png',
+            url: 'http://localhost:3000/storage/projects/p1/assets/asset-hero-1.png',
+            placeholder: 'http://localhost:3000/storage/projects/p1/assets/asset-hero-1.png',
+          },
+        ],
+        pages: [
+          {
+            id: 'page-1',
+            name: 'Home',
+            sections: [
+              {
+                id: 'sec-1',
+                role: 'hero',
+                confidence: 0.95,
+                styles: {},
+                children: [
+                  {
+                    id: 'img-1',
+                    kind: 'image',
+                    confidence: 0.95,
+                    styles: {},
+                    assetId: 'asset-hero-1',
+                    alt: 'Hero Athlete',
+                    path: 'projects/p1/assets/asset-hero-1.png',
+                    url: 'http://localhost:3000/storage/projects/p1/assets/asset-hero-1.png',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      } as unknown as DIRDocument;
+
+      const generator = new ElementorGenerator();
+      const { document } = generator.convert(testDir);
+
+      const section = document.content[0];
+      const imageWidget = section.elements[0];
+
+      expect(imageWidget.widgetType).toBe('image');
+      expect(imageWidget.settings.image).toBeDefined();
+      expect(imageWidget.settings.image.url).toBe('http://localhost:3000/storage/projects/p1/assets/asset-hero-1.png');
+      expect(imageWidget.settings.image.path).toBe('projects/p1/assets/asset-hero-1.png');
+      expect(imageWidget.settings.image.id).toBe('asset-hero-1');
+    });
+
+    it('should preserve path on background_image when present in container styles', () => {
+      const testDir = {
+        version: '1.0.0',
+        meta: {
+          sourceImageHash: 'test-hash',
+          sourceWidth: 1440,
+          sourceHeight: 900,
+          analysisProvider: 'test',
+          analysisModel: 'test-model',
+          analysisTimestamp: new Date().toISOString(),
+          confidenceScore: 0.95,
+          schemaVersion: '1.0.0',
+          promptVersion: '1.0.0',
+        },
+        pages: [
+          {
+            id: 'page-1',
+            name: 'Home',
+            sections: [
+              {
+                id: 'sec-bg',
+                role: 'hero',
+                confidence: 0.95,
+                styles: {
+                  backgroundImage: 'http://localhost:3000/storage/bg.png',
+                  backgroundImagePath: 'projects/p1/assets/bg.png',
+                  backgroundImageAssetId: 'asset-bg-1',
+                },
+                children: [],
+              },
+            ],
+          },
+        ],
+      } as unknown as DIRDocument;
+
+      const generator = new ElementorGenerator();
+      const { document } = generator.convert(testDir);
+
+      const section = document.content[0];
+      expect(section.settings.background_image).toBeDefined();
+      expect(section.settings.background_image.url).toBe('http://localhost:3000/storage/bg.png');
+      expect(section.settings.background_image.path).toBe('projects/p1/assets/bg.png');
+      expect(section.settings.background_image.id).toBe('asset-bg-1');
+    });
+
+    it('preserves observed typography (48px, weight 700, color, alignment) and layout_tree (direction row, gap 24px) through normalizer and compiler', () => {
+      const rawAiOutput = {
+        version: '1.0.0',
+        pages: [
+          {
+            id: 'page-1',
+            name: 'Home',
+            sections: [
+              {
+                id: 'sec-hero',
+                role: 'hero',
+                children: [
+                  {
+                    id: 'cont-1',
+                    kind: 'container',
+                    layout_tree: {
+                      direction: 'row',
+                      justify_content: 'space-between',
+                      align_items: 'center',
+                      gap_px: 24,
+                    },
+                    children: [
+                      {
+                        id: 'heading-1',
+                        kind: 'heading',
+                        text: 'Super Fitness Hero',
+                        level: 1,
+                        typography: {
+                          font_size_px: 48,
+                          font_weight: 700,
+                          color_hex: '#ff6600',
+                          text_align: 'center',
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      const normalized = normalizeDIR(rawAiOutput);
+      const generator = new ElementorGenerator();
+      const { document } = generator.convert(normalized);
+
+      const section = document.content[0];
+      const container = section.elements[0];
+      const heading = container.elements[0];
+
+      // Verify layout_tree observations were not stripped
+      expect(container.settings.flex_direction).toBe('row');
+      expect(container.settings.flex_gap).toBeDefined();
+      expect(container.settings.flex_gap.size).toBe(24);
+      expect(container.settings.flex_justify_content).toBe('space-between');
+      expect(container.settings.flex_align_items).toBe('center');
+
+      // Verify typography observations were not stripped
+      expect(heading.widgetType).toBe('heading');
+      expect(heading.settings.typography_font_size).toBeDefined();
+      expect(heading.settings.typography_font_size.size).toBe(48);
+      expect(heading.settings.typography_font_weight).toBe('700');
+      expect(heading.settings.title_color).toBe('#ff6600');
+      expect(heading.settings.align).toBe('center');
     });
   });
 });

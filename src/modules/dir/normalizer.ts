@@ -177,7 +177,7 @@ export function normalizeStyles(rawStyles: unknown): Record<string, any> {
 
   // 9. Remove unrecognized CSS keys that violate dirStyles.strict()
   // Specific common CSS keys that models inject into styles:
-  const strippedCssKeys = ['top', 'right', 'bottom', 'left', 'gridTemplateColumns', 'objectFit', 'float', 'clear'];
+  const strippedCssKeys = ['top', 'right', 'bottom', 'left', 'gridTemplateColumns', 'objectFit', 'float', 'clear', 'direction', 'width_pct'];
   for (const key of strippedCssKeys) {
     if (s[key] !== undefined && !VALID_STYLE_KEYS.has(key)) {
       delete s[key];
@@ -204,7 +204,155 @@ export function normalizeNode(rawNode: unknown): any {
     : parseNumeric(node.confidence) ?? 0.9;
 
   // Extract styles properties before normalizing styles
-  const rawStyles = node.styles && typeof node.styles === 'object' ? node.styles : {};
+  const rawStyles = node.styles && typeof node.styles === 'object' ? { ...node.styles } : {};
+
+  // Reconcile and hoist layout properties placed inside styles by AI models
+  if (rawStyles.direction) {
+    const dir = rawStyles.direction === 'row' ? 'row' : 'column';
+    if (node.kind === 'container' || node.kind === 'flex-group') {
+      node.direction = node.direction || dir;
+    }
+    rawStyles.flexDirection = rawStyles.flexDirection || dir;
+    delete rawStyles.direction;
+  }
+  if (rawStyles.flexDirection) {
+    const dir = rawStyles.flexDirection === 'row' ? 'row' : 'column';
+    if (node.kind === 'container' || node.kind === 'flex-group') {
+      node.direction = node.direction || dir;
+    }
+  }
+  if (rawStyles.justifyContent) {
+    if (node.kind === 'flex-group') {
+      node.justifyContent = node.justifyContent || rawStyles.justifyContent;
+    }
+  }
+  if (rawStyles.alignItems) {
+    if (node.kind === 'flex-group') {
+      node.alignItems = node.alignItems || rawStyles.alignItems;
+    }
+  }
+  if (rawStyles.gap !== undefined) {
+    const g = parseNumeric(rawStyles.gap);
+    if (g !== undefined) {
+      if (node.kind === 'container' || node.kind === 'flex-group' || node.kind === 'grid-group') {
+        node.gap = node.gap ?? g;
+      }
+    }
+  }
+  if (rawStyles.width_pct !== undefined) {
+    const w = parseNumeric(rawStyles.width_pct);
+    if (w !== undefined && !rawStyles.width) {
+      rawStyles.width = `${w}%`;
+    }
+    delete rawStyles.width_pct;
+  }
+
+  // Reconcile typography into rawStyles
+  if (node.typography && typeof node.typography === 'object') {
+    const typo = node.typography;
+    if (rawStyles.fontSize === undefined && typo.font_size_px !== undefined) {
+      rawStyles.fontSize = parseNumeric(typo.font_size_px);
+    }
+    if (rawStyles.fontWeight === undefined && typo.font_weight !== undefined) {
+      rawStyles.fontWeight = typo.font_weight;
+    }
+    if (rawStyles.fontFamily === undefined && (typo.font_family_guess || typo.font_family)) {
+      rawStyles.fontFamily = typo.font_family_guess || typo.font_family;
+    }
+    if (rawStyles.color === undefined && (typo.color_hex || typo.color)) {
+      rawStyles.color = typo.color_hex || typo.color;
+    }
+    if (rawStyles.lineHeight === undefined && (typo.line_height_em !== undefined || typo.line_height !== undefined)) {
+      rawStyles.lineHeight = parseNumeric(typo.line_height_em ?? typo.line_height);
+    }
+    if (rawStyles.letterSpacing === undefined && (typo.letter_spacing_px !== undefined || typo.letter_spacing !== undefined)) {
+      rawStyles.letterSpacing = parseNumeric(typo.letter_spacing_px ?? typo.letter_spacing);
+    }
+    if (rawStyles.textAlign === undefined && (typo.text_align || typo.textAlign)) {
+      rawStyles.textAlign = typo.text_align || typo.textAlign;
+    }
+  }
+
+  // Reconcile layout_tree into node and rawStyles
+  if (node.layout_tree && typeof node.layout_tree === 'object') {
+    const lt = node.layout_tree;
+    if (lt.direction) {
+      const dir = lt.direction === 'row' ? 'row' : 'column';
+      if (node.kind === 'container' || node.kind === 'flex-group') {
+        node.direction = node.direction || dir;
+      }
+      rawStyles.flexDirection = rawStyles.flexDirection || dir;
+    }
+    if (lt.gap_px !== undefined) {
+      const g = parseNumeric(lt.gap_px);
+      if (g !== undefined) {
+        if (node.kind === 'container' || node.kind === 'flex-group' || node.kind === 'grid-group') {
+          node.gap = node.gap ?? g;
+        }
+        rawStyles.gap = rawStyles.gap ?? g;
+      }
+    }
+    if (lt.justify_content || lt.justifyContent) {
+      const jc = lt.justify_content || lt.justifyContent;
+      if (node.kind === 'flex-group') {
+        node.justifyContent = node.justifyContent || jc;
+      }
+      rawStyles.justifyContent = rawStyles.justifyContent || jc;
+    }
+    if (lt.align_items || lt.alignItems) {
+      const ai = lt.align_items || lt.alignItems;
+      if (node.kind === 'flex-group') {
+        node.alignItems = node.alignItems || ai;
+      }
+      rawStyles.alignItems = rawStyles.alignItems || ai;
+    }
+    if (lt.padding_px !== undefined) {
+      const p = parseNumeric(lt.padding_px);
+      if (p !== undefined && !rawStyles.padding) {
+        rawStyles.padding = { top: p, right: p, bottom: p, left: p };
+      }
+    }
+    if (lt.width_pct !== undefined) {
+      const w = parseNumeric(lt.width_pct);
+      if (w !== undefined && !rawStyles.width) {
+        rawStyles.width = `${w}%`;
+      }
+    }
+  }
+
+  // Sanitize node-level keys that violate strict node schemas
+  if (node.kind !== 'flex-group') {
+    if (node.justifyContent) {
+      rawStyles.justifyContent = rawStyles.justifyContent || node.justifyContent;
+      delete node.justifyContent;
+    }
+    if (node.alignItems) {
+      rawStyles.alignItems = rawStyles.alignItems || node.alignItems;
+      delete node.alignItems;
+    }
+  }
+  if (node.kind !== 'container' && node.kind !== 'flex-group') {
+    delete node.direction;
+    delete node.wrap;
+  }
+  if (node.kind !== 'container' && node.kind !== 'flex-group' && node.kind !== 'grid-group') {
+    delete node.gap;
+  }
+
+  // Reconcile form_details into rawStyles
+  if (node.form_details && typeof node.form_details === 'object') {
+    const fd = node.form_details;
+    if (rawStyles.backgroundColor === undefined && fd.background_hex) {
+      rawStyles.backgroundColor = fd.background_hex;
+    }
+    if (rawStyles.borderRadius === undefined && fd.border_radius_px !== undefined) {
+      rawStyles.borderRadius = parseNumeric(fd.border_radius_px);
+    }
+    if (rawStyles.gap === undefined && fd.field_gap_px !== undefined) {
+      rawStyles.gap = parseNumeric(fd.field_gap_px);
+      node.gap = node.gap ?? rawStyles.gap;
+    }
+  }
 
   // Kind-specific mappings from styles:
   // 1. Grid group: columns
@@ -273,9 +421,95 @@ export function normalizeNode(rawNode: unknown): any {
         node.level = 2;
       }
     }
+    const accentWord = node.accentWord || node.accent_word || node.accent?.text;
+    if (accentWord && typeof accentWord === 'string') {
+      node.accentWord = accentWord;
+    }
+    const accentColor = node.accentColor || node.accent_color || node.accent?.color;
+    if (accentColor && typeof accentColor === 'string') {
+      node.accentColor = accentColor;
+    }
   }
 
-  // Normalize styles object
+  // 5. Rating: value, max
+  if (node.kind === 'rating') {
+    const val = parseNumeric(node.value ?? node.stars ?? node.score ?? node.rating ?? node.count);
+    node.value = val !== undefined ? Math.min(5, Math.max(0, val)) : 5;
+    if (node.max !== undefined) {
+      const m = parseNumeric(node.max);
+      node.max = m !== undefined ? m : 5;
+    }
+    delete node.stars;
+    delete node.score;
+    delete node.count;
+  }
+
+  // 6. Counter: value, suffix, prefix, title
+  if (node.kind === 'counter') {
+    const val = parseNumeric(node.value ?? node.count ?? node.number ?? node.target);
+    node.value = val !== undefined ? val : 100;
+    delete node.count;
+    delete node.number;
+    delete node.target;
+  }
+
+  // 7. Progress Bar: value, max, label
+  if (node.kind === 'progress-bar') {
+    const val = parseNumeric(node.value ?? node.percentage ?? node.percent ?? node.progress);
+    node.value = val !== undefined ? Math.min(100, Math.max(0, val)) : 50;
+    if (node.max !== undefined) {
+      const m = parseNumeric(node.max);
+      node.max = m !== undefined ? m : 100;
+    }
+    delete node.percentage;
+    delete node.percent;
+    delete node.progress;
+  }
+
+  // 8. Spacer: height
+  if (node.kind === 'spacer') {
+    const h = parseNumeric(node.height);
+    node.height = h !== undefined && h > 0 ? h : 20;
+  }
+
+  // 9. Badge: text
+  if (node.kind === 'badge') {
+    if (!node.text) {
+      node.text = String(node.label || node.title || node.value || 'Badge');
+    }
+    delete node.label;
+    delete node.title;
+    delete node.value;
+  }
+
+  // 10. Button: text
+  if (node.kind === 'button') {
+    if (!node.text) {
+      node.text = String(node.label || node.title || 'Button');
+    }
+    delete node.label;
+    delete node.title;
+  }
+
+  // 11. Link: text
+  if (node.kind === 'link') {
+    if (!node.text) {
+      node.text = String(node.label || node.title || 'Link');
+    }
+    delete node.label;
+    delete node.title;
+  }
+
+  // 12. Icon-Text & List-Item: text
+  if (node.kind === 'icon-text' || node.kind === 'list-item') {
+    if (!node.text) {
+      node.text = String(node.title || node.label || node.value || '');
+    }
+    if (node.kind === 'icon-text') {
+      delete node.label;
+      delete node.value;
+    }
+  }
   node.styles = normalizeStyles(rawStyles);
 
   // Normalize responsiveOverrides if present
@@ -307,7 +541,7 @@ export function normalizeSection(rawSection: unknown): any {
     return rawSection;
   }
 
-  const sec = { ...(rawSection as Record<string, any>) };
+  let sec = { ...(rawSection as Record<string, any>) };
 
   sec.id = sec.id && typeof sec.id === 'string' ? sec.id : `sec_${Math.random().toString(36).slice(2, 9)}`;
   sec.confidence = typeof sec.confidence === 'number'
@@ -319,7 +553,44 @@ export function normalizeSection(rawSection: unknown): any {
     sec.role = 'generic';
   }
 
-  sec.styles = normalizeStyles(sec.styles);
+  const rawSecStyles = sec.styles && typeof sec.styles === 'object' ? { ...sec.styles } : {};
+
+  // Reconcile canvas_bounds into section background color and gradient
+  if (sec.canvas_bounds && typeof sec.canvas_bounds === 'object') {
+    if (!rawSecStyles.backgroundColor && sec.canvas_bounds.primary_hex) {
+      rawSecStyles.backgroundColor = sec.canvas_bounds.primary_hex;
+    }
+    const isGrad =
+      sec.canvas_bounds.inner_bg_type === 'gradient' ||
+      Boolean(sec.canvas_bounds.primary_hex && sec.canvas_bounds.secondary_hex && sec.canvas_bounds.primary_hex !== sec.canvas_bounds.secondary_hex);
+    if (isGrad && !rawSecStyles.backgroundGradient) {
+      rawSecStyles.backgroundGradient = {
+        type: 'linear',
+        startColor: sec.canvas_bounds.primary_hex,
+        endColor: sec.canvas_bounds.secondary_hex || sec.canvas_bounds.primary_hex,
+        angle: sec.canvas_bounds.gradient_angle ?? 180,
+      };
+    }
+  }
+
+  // Reconcile layout_tree into section styles
+  if (sec.layout_tree && typeof sec.layout_tree === 'object') {
+    const lt = sec.layout_tree;
+    if (lt.direction && !rawSecStyles.flexDirection) {
+      rawSecStyles.flexDirection = lt.direction === 'row' ? 'row' : 'column';
+    }
+    if (lt.gap_px !== undefined && rawSecStyles.gap === undefined) {
+      rawSecStyles.gap = parseNumeric(lt.gap_px);
+    }
+    if (lt.padding_px !== undefined && !rawSecStyles.padding) {
+      const p = parseNumeric(lt.padding_px);
+      if (p !== undefined) {
+        rawSecStyles.padding = { top: p, right: p, bottom: p, left: p };
+      }
+    }
+  }
+
+  sec.styles = normalizeStyles(rawSecStyles);
 
   if (sec.responsiveOverrides && typeof sec.responsiveOverrides === 'object') {
     const normOverrides: Record<string, any> = {};
@@ -337,6 +608,215 @@ export function normalizeSection(rawSection: unknown): any {
     sec.children = [];
   }
 
+  if (sec.role === 'header' || sec.role === 'navigation' || sec.id?.includes('header') || sec.id?.includes('nav')) {
+    sec = normalizeHeaderSection(sec);
+  }
+
+  return sec;
+}
+
+/**
+ * Normalizes a header/navigation section into a canonical 3-slot layout:
+ * [ Brand Logo (left), Navigation Menu (center), Actions/Buttons (right) ]
+ */
+function normalizeHeaderSection(sec: any): any {
+  sec.role = 'header';
+  sec.styles = sec.styles || {};
+  sec.styles.flexDirection = 'row';
+  sec.styles.justifyContent = sec.styles.justifyContent || 'space-between';
+  sec.styles.alignItems = sec.styles.alignItems || 'center';
+
+  if (!Array.isArray(sec.children) || sec.children.length === 0) {
+    return sec;
+  }
+
+  // 1. Unwrap redundant single wrapper container if it wraps the entire navbar
+  let rawChildren = sec.children;
+  if (
+    rawChildren.length === 1 &&
+    ['container', 'flex-group'].includes(rawChildren[0]?.kind) &&
+    Array.isArray(rawChildren[0]?.children) &&
+    rawChildren[0].children.length >= 2
+  ) {
+    const wrapper = rawChildren[0];
+    if (wrapper.styles) {
+      if (wrapper.styles.justifyContent) sec.styles.justifyContent = wrapper.styles.justifyContent;
+      if (wrapper.styles.alignItems) sec.styles.alignItems = wrapper.styles.alignItems;
+      if (wrapper.styles.padding && !sec.styles.padding) sec.styles.padding = wrapper.styles.padding;
+    }
+    rawChildren = wrapper.children;
+  }
+
+  // 2. Classify items into 3 slots: Logo, MenuLinks, ActionButtons
+  const logos: any[] = [];
+  const menuItems: any[] = [];
+  const actionItems: any[] = [];
+
+  for (let i = 0; i < rawChildren.length; i++) {
+    const child = rawChildren[i];
+    if (!child) continue;
+
+    const idStr = String(child.id || '').toLowerCase();
+    const altStr = String(child.alt || '').toLowerCase();
+    const assetIdStr = String(child.assetId || '').toLowerCase();
+    const labelStr = String(child.label || '').toLowerCase();
+    const isLogo =
+      labelStr === 'logo' ||
+      idStr.includes('logo') ||
+      altStr.includes('logo') ||
+      assetIdStr.includes('logo') ||
+      (i === 0 && child.kind === 'image');
+
+    if (isLogo) {
+      child.label = 'logo';
+      child.styles = child.styles || {};
+      if (typeof child.styles.width === 'number') {
+        child.styles.width = Math.min(260, Math.max(60, child.styles.width));
+      } else {
+        child.styles.width = 150;
+      }
+      logos.push(child);
+      continue;
+    }
+
+    // Check if child text/title indicates a header action or language switcher
+    const textLower = String(child.text || child.title || '').trim().toLowerCase();
+    const isActionWord = /^(log\s*in|sign\s*in|sign\s*up|register|get\s*started|contact(\s*us)?|book\s*now|en(\s*▾|\s*v|\s*⌄)?)$/i.test(textLower);
+
+    // Check if child is an action button or action link
+    if (child.kind === 'button' || isActionWord || (actionItems.length > 0 && (child.kind === 'link' || child.kind === 'text'))) {
+      actionItems.push(child);
+      continue;
+    }
+
+    // Check if child is a container / flex-group
+    if (['container', 'flex-group'].includes(child.kind) && Array.isArray(child.children)) {
+      const hasButtons = child.children.some((c: any) => c.kind === 'button');
+      const hasOnlyLinks = child.children.every((c: any) => c.kind === 'link' || c.kind === 'text' || c.kind === 'icon-text');
+
+      if (hasButtons || idStr.includes('action') || idStr.includes('btn') || idStr.includes('cta')) {
+        child.direction = 'row';
+        child.label = 'header-actions';
+        child.styles = child.styles || {};
+        child.styles.flexDirection = 'row';
+        child.styles.alignItems = 'center';
+        child.styles.justifyContent = 'flex-end';
+        child.styles.gap = child.styles.gap ?? child.gap ?? 20;
+        actionItems.push(child);
+      } else if (hasOnlyLinks || idStr.includes('nav') || idStr.includes('menu') || idStr.includes('link')) {
+        child.direction = 'row';
+        child.label = 'navigation-menu';
+        child.styles = child.styles || {};
+        child.styles.flexDirection = 'row';
+        child.styles.alignItems = 'center';
+        child.styles.gap = child.styles.gap ?? child.gap ?? 32;
+        menuItems.push(child);
+      } else {
+        menuItems.push(child);
+      }
+      continue;
+    }
+
+    // Loose links or text
+    if (child.kind === 'link' || child.kind === 'icon-text' || child.kind === 'text') {
+      menuItems.push(child);
+      continue;
+    }
+
+    // If first heading and no logo yet, treat as typography brand logo
+    if (i === 0 && child.kind === 'heading' && logos.length === 0) {
+      child.label = 'logo';
+      logos.push(child);
+      continue;
+    }
+
+    menuItems.push(child);
+  }
+
+  // 3. Reconstruct canonical children: [ Logo, Menu, Actions ]
+  const finalChildren: any[] = [];
+
+  // Slot 1: Logo
+  if (logos.length > 0) {
+    finalChildren.push(logos[0]);
+  }
+
+  // Slot 2: Menu
+  if (menuItems.length > 0) {
+    if (menuItems.length === 1 && ['container', 'flex-group'].includes(menuItems[0].kind)) {
+      const m = menuItems[0];
+      m.direction = 'row';
+      m.label = 'navigation-menu';
+      m.styles = m.styles || {};
+      m.styles.flexDirection = 'row';
+      m.styles.alignItems = 'center';
+      m.styles.gap = m.styles.gap ?? m.gap ?? 32;
+      finalChildren.push(m);
+    } else {
+      finalChildren.push({
+        id: `${sec.id}_nav_menu`,
+        kind: 'flex-group',
+        label: 'navigation-menu',
+        direction: 'row',
+        gap: 32,
+        alignItems: 'center',
+        justifyContent: 'center',
+        styles: {
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 32,
+        },
+        children: menuItems,
+        confidence: 0.98,
+      });
+    }
+  }
+
+  // Slot 3: Actions / Buttons
+  if (actionItems.length > 0) {
+    if (actionItems.length === 1 && actionItems[0].kind === 'button') {
+      finalChildren.push(actionItems[0]);
+    } else if (actionItems.length === 1 && ['container', 'flex-group'].includes(actionItems[0].kind)) {
+      const a = actionItems[0];
+      a.direction = 'row';
+      a.label = 'header-actions';
+      a.styles = a.styles || {};
+      a.styles.flexDirection = 'row';
+      a.styles.alignItems = 'center';
+      a.styles.justifyContent = 'flex-end';
+      a.styles.gap = a.styles.gap ?? a.gap ?? 20;
+      finalChildren.push(a);
+    } else {
+      // Flatten all action items into a single row flex-group
+      const flatActions: any[] = [];
+      for (const item of actionItems) {
+        if (Array.isArray(item.children)) {
+          flatActions.push(...item.children);
+        } else {
+          flatActions.push(item);
+        }
+      }
+      finalChildren.push({
+        id: `${sec.id}_actions_group`,
+        kind: 'flex-group',
+        label: 'header-actions',
+        direction: 'row',
+        gap: 20,
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        styles: {
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          gap: 20,
+        },
+        children: flatActions,
+        confidence: 0.98,
+      });
+    }
+  }
+
+  sec.children = finalChildren;
   return sec;
 }
 
@@ -437,9 +917,10 @@ export function normalizeDIR(rawDoc: unknown): any {
   if (!doc.globals.colors || typeof doc.globals.colors !== 'object' || Array.isArray(doc.globals.colors)) {
     doc.globals.colors = {};
   }
-  doc.globals.colors.background = typeof doc.globals.colors.background === 'string' && doc.globals.colors.background.trim()
+  const defaultBg = doc.canvas_bounds?.primary_hex || '#ffffff';
+  doc.globals.colors.background = typeof doc.globals.colors.background === 'string' && doc.globals.colors.background.trim() && doc.globals.colors.background !== '#ffffff'
     ? doc.globals.colors.background
-    : '#ffffff';
+    : defaultBg;
   doc.globals.colors.text = typeof doc.globals.colors.text === 'string' && doc.globals.colors.text.trim()
     ? doc.globals.colors.text
     : '#0f172a';

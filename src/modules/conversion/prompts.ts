@@ -39,9 +39,18 @@ export interface PromptPayload {
  */
 export function getImageAnalysisPrompt(
   imageInfo: ImageAnalysisInfo,
-  _dirSchemaSummary?: string
+  skillInstructions?: string
 ): PromptPayload {
   const version = PROMPT_VERSIONS.IMAGE_ANALYSIS;
+
+  let operativeSkill = skillInstructions;
+  if (!operativeSkill) {
+    try {
+      operativeSkill = loadRootSkillInstructions().content;
+    } catch {
+      // fallback if file not found in test context
+    }
+  }
 
   const supportedSectionRoles = [
     'header', 'navigation', 'hero', 'feature', 'content', 'cta',
@@ -60,10 +69,13 @@ export function getImageAnalysisPrompt(
     ? `TILING CONTEXT: This is vertical slice ${imageInfo.tileIndex ?? 0 + 1} of ${imageInfo.totalTiles ?? 1} with an overlap of ${imageInfo.overlapY ?? 0}px. Identify sections within this slice and note partial sections near top/bottom boundaries.`
     : `SINGLE IMAGE: This is the full webpage screenshot (${imageInfo.width}x${imageInfo.height}px). Analyze the full vertical hierarchy.`;
 
-  const systemPrompt = `You are an expert design-to-code vision system specialized in website layout understanding.
+  const systemPrompt = `You are an expert design-to-code vision system specialized in website layout understanding for native Elementor conversion.
 Prompt Version: ${version}
 
-Your task is to analyze the provided webpage screenshot and generate a Design Intermediate Representation (DIR) JSON document.
+${operativeSkill ? `OPERATIVE ELEMENTOR CONVERSION SKILL INSTRUCTIONS (server/ELEMENTOR_SKILL.md):
+${operativeSkill}
+
+` : ''}Your task is to analyze the provided webpage screenshot and generate a Design Intermediate Representation (DIR) JSON document.
 Output MUST be strict, valid JSON with NO commentary, NO markdown fences, and NO conversational text.
 
 1. CANVAS ISOLATION RULE (MANDATORY):
@@ -126,9 +138,9 @@ DIR SCHEMA REQUIREMENTS:
          "border": "<hex>"
        },
        "typography": {
-         "fontFamilies": ["<font-family>"],
-         "headingFont": "<font-family>",
-         "bodyFont": "<font-family>",
+         "fontFamilies": ["<observed Google Font names, e.g. Plus Jakarta Sans, Inter, Poppins, Montserrat, Roboto, Outfit, Playfair Display>"],
+         "headingFont": "<primary font for display & headings, e.g. Plus Jakarta Sans, Poppins, Outfit, Playfair Display>",
+         "bodyFont": "<primary font for paragraphs, links, and buttons, e.g. Inter, Plus Jakarta Sans, Roboto>",
          "baseSize": 16,
          "scale": 1.2
        },
@@ -191,14 +203,15 @@ STRICT DIR SCHEMA SPECIFICATIONS FOR ACCURACY:
     "padding_px": <number>,
     "width_pct": <number 0-100>
   }
-- "typography": Explicit visual typography breakdown for all text, headings, and buttons:
+- "typography": Comprehensive visual typography breakdown for all text, headings, and buttons:
   {
-    "font_family_guess": "<Poppins|Montserrat|Inter|Roboto|sans-serif>",
-    "font_size_px": <number>,
-    "font_weight": <number 300-900>,
-    "line_height_em": <number e.g. 1.2 or 1.5>,
-    "letter_spacing_px": <number>,
-    "color_hex": "<hex>",
+    "font_family_guess": "<canonical font name, e.g. Plus Jakarta Sans | Inter | Poppins | Montserrat | Roboto | Outfit | Playfair Display>",
+    "font_size_px": <number, bare integer e.g. 15, 24, 48>,
+    "font_weight": <number 400 | 500 | 600 | 700 | 800>,
+    "line_height_em": <number e.g. 1.15 for headings, 1.6 for body copy>,
+    "letter_spacing_px": <number e.g. -1 for large titles, 1.5 for uppercase subtitles>,
+    "text_transform": "uppercase" | "capitalize" | "lowercase" | "none",
+    "color_hex": "<exact text color sampled from image, e.g. #FFFFFF on dark theme, #182135 on light>",
     "inline_color_spans": [
       { "text": "<span text>", "color_hex": "<hex>" }
     ]
@@ -235,11 +248,52 @@ CRITICAL ASSET & BOUNDING BOX RULES:
 - Never provide coordinates outside the image frame.
 
 CRITICAL VISUAL FIDELITY & LAYOUT ACCURACY:
-- CANVAS & SECTION BACKGROUNDS: Faithfully capture page backgrounds! If dark, specify in "globals.colors.background" and hero "styles.backgroundColor". If light/cream (e.g. #FAF7F2, #FFFDF9), set background color accordingly. Never leave hero background transparent.
-- HEADER & NAVIGATION BAR: Structure the header horizontally ("direction": "row", "justifyContent": "space-between", "alignItems": "center") containing:
-  1. Brand Logo: If the logo consists of an icon/mark or distinct SVG/bitmap graphic (e.g. BrainGig, StrongBody), define an asset with exact "sourceRect" in root "assets" and reference it via an 'image' node (or text heading if pure typography).
-  2. Navigation Menu Links: Group links together in a container/flex-group with "direction": "row", "gap": 24-32.
-  3. Header CTA Button: Distinct action button (e.g. "Start a project ->", "Join Now").
+- CANVAS & SECTION BACKGROUNDS (GRADIENTS & TRUE HUES):
+  Faithfully capture page backgrounds with strict chromatic accuracy!
+  - BACKGROUND GRADIENTS: Inspect if the background has a gradient, radial aura, or smooth vertical transition (e.g. shifting from royal navy #1B2248 at top to deep midnight navy #141B3C at bottom).
+    When observed, YOU MUST populate:
+    "canvas_bounds": {
+      "crop_mockup": true,
+      "inner_bg_type": "gradient",
+      "primary_hex": "#1B2248",
+      "secondary_hex": "#141B3C",
+      "gradient_angle": 180
+    }
+    and on the section styles:
+    "styles": {
+      "backgroundColor": "#1B2248",
+      "backgroundGradient": {
+        "type": "linear",
+        "startColor": "#1B2248",
+        "endColor": "#141B3C",
+        "angle": 180
+      }
+    }
+  - NEVER COLLAPSE NAVY/SLATE TO PITCH BLACK: If a background has blue, indigo, or slate undertones (e.g. #1B2248, #182044, #151C38), sample the true dark blue hue! Never round it to flat pitch black (#000000).
+
+- CHROMATIC FIDELITY FOR BUTTONS & ACCENTS (NO TAILWIND PRESET SNAPPING):
+  - SAMPLE ACTUAL PIXEL COLORS: Never lazily snap colors to generic Tailwind presets (such as #fde047 or #facc15)!
+  - PASTEL PEACH / CARAMEL / APRICOT / GOLD: If a button or accent is warm pastel peach, apricot, caramel, beige, cream, or sand (e.g. #E7C69F, #E8B788, #DEB285, #E2B17A, #F5D0A9), output that EXACT warm hex code!
+    DO NOT output neon yellow (#FDE047, #FACC15, or #FFFF00) unless the element is literally a high-visibility neon yellow highlighter!
+  - BUTTON BORDER RADIUS: Always specify button border radius! If rounded rectangle, set "borderRadius": 8. If a pill CTA (e.g. "Get Started" or search pill), set "borderRadius": 50 or 9999.
+
+- NAVIGATION MENU STYLING ON DARK THEMES:
+  - Menu links on dark themes are typically soft slate / light grey (#CBD5E1, #B4BCD0, #94A3B8) for inactive links, with the active link (e.g. "Home") highlighted in white (#FFFFFF) or warm accent (#DEB285).
+  - Do NOT output harsh stark #FFFFFF for all inactive nav links when the design uses softer, elegant slate tones.
+
+- INTEGRATED SEARCH & NEWSLETTER FORM PILL:
+  - When an email/search input is followed by a "Get Started" or "Subscribe" button in a single cohesive row:
+    - Left Input: "styles": { "backgroundColor": "rgba(255, 255, 255, 0.08)", "color": "#FFFFFF", "borderRadius": { "topLeft": 50, "bottomLeft": 50, "topRight": 0, "bottomRight": 0 } }
+    - Right Button: "styles": { "backgroundColor": "<sampled accent hex>", "borderRadius": { "topLeft": 0, "bottomLeft": 0, "topRight": 50, "bottomRight": 50 } }
+- HEADER & NAVIGATION BAR:
+  If the uploaded design contains a top navigation bar (logo, links, and/or action buttons):
+  YOU MUST ALWAYS define a dedicated section at the very top: "id": "sec_header", "role": "header".
+  The header section MUST be laid out horizontally: "direction": "row", "justifyContent": "space-between", "alignItems": "center".
+  It MUST be cleanly separated into 3 distinct parts in its "children" array (or 2 parts if no CTA button):
+  1. Brand Logo (Slot 1, far left): If visual mark or graphic, define a cropped logo asset in root "assets" with exact "sourceRect" and reference it with an 'image' node with "label": "logo" and pixel dimensions (e.g. "styles": { "width": 120-180, "height": 30-50 }). If typography brand, a 'heading' node.
+  2. Navigation Menu Links (Slot 2, center): A container/flex-group with "id": "nav_menu", "label": "navigation-menu", "direction": "row", "gap": 28-36, "alignItems": "center" containing individual 'link' nodes for each menu link (e.g. "Home", "Services", "About Us", "Contact"). NEVER merge menu links into the logo or button.
+  3. Header CTA & Actions (Slot 3, far right): A 'button' node (e.g. "Start a project ->", "Join Now") or a horizontal flex-group with "label": "header-actions", "direction": "row", "gap": 16, "alignItems": "center" if there are multiple action items (e.g. "Login" link + "Sign up" button).
+  DO NOT omit the header section or merge navbar items into the hero section!
 - 2-COLUMN HERO SPLIT (CONTENT VS VISUAL):
   When a design features copy/headline/CTA/metrics on one side and a person, photo, or 3D graphic on the other side, YOU MUST structure the hero content as a 2-column horizontal container ("direction": "row", "justifyContent": "space-between", "alignItems": "center"):
   - Left Container (Content, width ~50-60%): Contains the eyebrow badge/tagline, headline (H1), body text, CTA button group, and statistics metrics.

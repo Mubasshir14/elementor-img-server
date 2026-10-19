@@ -17,9 +17,9 @@ describe('Gemini Model Resolution & 404 Bounded Handling', () => {
   });
 
   describe('1. Model Configuration & Capability Registry', () => {
-    it('env defaults specify gemini-3.8-flash for GEMINI_MODEL and VISION_AI_MODEL', () => {
-      expect(env.GEMINI_MODEL).toBe('gemini-3.8-flash');
-      expect(env.VISION_AI_MODEL).toBe('gemini-3.8-flash');
+    it('env defaults specify gemini-3.x-flash for GEMINI_MODEL and VISION_AI_MODEL', () => {
+      expect(env.GEMINI_MODEL).toMatch(/gemini-3\.[58]-flash/);
+      expect(env.VISION_AI_MODEL).toMatch(/gemini-3\.[58]-flash/);
     });
 
     it('gemini-3.8-flash is registered as image-capable in AI capabilities', () => {

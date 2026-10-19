@@ -40,9 +40,10 @@ The pipeline strictly isolates visual interpretation from WordPress/Elementor JS
 The Vision model (e.g. Gemini 3.8 Flash or secondary vision provider) is exclusively responsible for visual perception, layout reconstruction, typography transcription, color extraction, and asset localization into the authoritative `DIRDocument` schema:
 
 1. **Header & Navigation Bar Decomposition:**
-   - **Brand Logo:** Structure as an H2/H3 `heading` or `image`/`logo` node.
-   - **Navigation Menu Links:** Group all visible menu items together into a horizontal container (`direction: "row"`, `gap: 28`) composed of `link` nodes with legible text and muted text colors (`#b0b8af`).
-   - **Distinct Header CTA:** Separate the primary call-to-action button ("Get Started") from the navigation links into a distinct `button` node with accent styling.
+   - **Canonical 3-Slot Partitioning:** Top header must be a dedicated section (`role: "header"`, `id: "sec_header"`, `direction: "row"`, `justifyContent: "space-between"`, `alignItems: "center"`) partitioned into 3 distinct functional slots:
+     - **Slot 1 (Left - Brand Logo):** `image` or `heading` node with `label: "logo"`. Enforce pixel width (e.g. 120–220px, height 32–50px), never percentage.
+     - **Slot 2 (Center - Navigation Menu Links):** Group all nav links together into a single horizontal container (`direction: "row"`, `gap: 28-36`, `label: "navigation-menu"`) composed of `link` nodes.
+     - **Slot 3 (Right - Header Actions & CTAs):** Separate action buttons and auxiliary links (e.g. "Login", "Sign up", language switcher "EN") into a distinct horizontal container (`direction: "row"`, `gap: 16-20`, `justifyContent: "flex-end"`, `label: "header-actions"`).
 2. **Hero Section Hierarchy:**
    - **Announcement Pill Badges:** Identify top-of-hero pill notifications (e.g., "A trusted modern fintech platform") as a `badge` node or a `container` with full pill border radius (`9999px`), light/lime accent background (`#b7f34c`), and high-contrast dark text (`#060b05`).
    - **Primary Headline:** Transcribe the primary page title (e.g., "Simplify your financial\nManagement") as an H1 `heading` with large font size (48–64px), matching alignment, and high-contrast color (`#ffffff` on dark themes).
@@ -65,8 +66,10 @@ The Elementor Layout Engine (deterministic compiler `convertDIRToElementor` and 
 1. **Root Envelope & Canvas Background:**
    - Root page settings must inherit `dir.globals.colors.background` (e.g., `#050a04`) with `template: "elementor_canvas"` and `background_background: "classic"`.
    - Root section containers inherit `pageBg` whenever section background is unset or transparent, preventing default white browser rendering.
-2. **Inline Navigation Menu Compilation:**
-   - Horizontal containers whose children are all `link` nodes must be compiled into the canonical Elementor Core `icon-list` widget with `view: "inline"`, `space_between: 28`, and muted text styling (`#b0b8af`), maintaining distinct CTA buttons.
+2. **Inline Navigation Menu & Actions Compilation:**
+   - **Slot 1 (Logo):** Pixel width (`unit: "px"`), `align: "left"`, `align_self: "center"`, `_element_width: "initial"`, `_flex_shrink: 0`, `_flex_grow: 0`.
+   - **Slot 2 (Menu):** Compiled into canonical Elementor Core `icon-list` widget with `view: "inline"`, `space_between: 32`, `align_self: "center"`, explicit width calculation (`width: { unit: "px", size: ... }`), `_element_width: "initial"`, `_flex_shrink: 0`, `_flex_grow: 0` so it NEVER wraps into multiple lines.
+   - **Slot 3 (Actions Container):** Container with `flex_direction: "row"`, `flex_wrap: "nowrap"`, `flex_justify_content: "flex-end"`, `flex_align_items: "center"`, `flex_grow: 0`, `_flex_grow: 0`, `flex_shrink: 0`, `_flex_shrink: 0`, `content_width: "full"`, `_element_width: "initial"`. Each child button has `_element_width: "initial"`, `_flex_shrink: 0` so buttons stay neatly grouped on the right edge without spreading across the navbar.
 3. **Pill Badge Container Generation:**
    - Compile `badge` nodes into a centered flex container with `border_radius: 9999px`, `background_background: "classic"`, `background_color: "#b7f34c"`, and inner span heading with contrasting dark text (`#060b05`).
 4. **Sub-Asset Resolution & Media Linking:**
@@ -130,7 +133,102 @@ Any alteration to skill prompts, widget profiles, or responsive mappings immedia
 
 ---
 
-## 3. Source and Compatibility Specifications
+## 3. Typography Engineering, Font Canonicalization & Color Binding Matrix
+
+Elementor Core relies on strict, widget-specific control keys to apply typography and color overrides. If typography properties are not bound to the exact control keys or if font families are specified with invalid generic names, Elementor will silently ignore the styling and fall back to the host WordPress theme defaults (often Times New Roman or Arial).
+
+### A. The Universal Cascading Inheritance Hierarchy
+Typography and text colors resolve according to a deterministic 5-level cascade:
+```
+Level 1: Explicit Node Inline Styles (`node.styles.fontFamily`, `node.styles.fontSize`, `node.styles.color`)
+   │
+   ▼ (if unset)
+Level 2: Node Typography Perception Object (`node.typography.font_family_guess`, `node.typography.color_hex`)
+   │
+   ▼ (if unset)
+Level 3: Global Document Typography (`dir.globals.typography.headingFont` for headings, `bodyFont` for text/buttons)
+   │
+   ▼ (if unset)
+Level 4: Global Document Font List (`dir.globals.typography.fontFamilies[0]`)
+   │
+   ▼ (if unset)
+Level 5: Canonical Modern Fallback (`"Plus Jakarta Sans"` for headings/display, `"Inter"` for body/buttons/links)
+```
+
+### B. Google Fonts Canonicalization
+Elementor natively connects to the Google Fonts library. Vision AI models often output loose names (e.g. `"Modern Sans"`, `"sans-serif"`, `"display"`, or quoted strings). The compiler maps these to canonical Google Fonts:
+
+| Input String / AI Guess | Canonical Elementor Google Font |
+|:---|:---|
+| `*jakarta*` | `"Plus Jakarta Sans"` |
+| `*inter*`, `*sans*`, `*sans-serif*`, `*clean*` | `"Inter"` |
+| `*poppins*` | `"Poppins"` |
+| `*montserrat*` | `"Montserrat"` |
+| `*roboto*` | `"Roboto"` |
+| `*outfit*` | `"Outfit"` |
+| `*serif*`, `*playfair*` | `"Playfair Display"` |
+| `*merriweather*` | `"Merriweather"` |
+| `*dm sans*`, `*dmsans*` | `"DM Sans"` |
+| `*lato*` | `"Lato"` |
+| `*open sans*` | `"Open Sans"` |
+| `*raleway*` | `"Raleway"` |
+| `*work sans*` | `"Work Sans"` |
+| `*space gro*` | `"Space Grotesk"` |
+| `*syne*` | `"Syne"` |
+| `*clash*` | `"Clash Display"` |
+| `*satoshi*` | `"Satoshi"` |
+| `*manrope*` | `"Manrope"` |
+| `*urbanist*` | `"Urbanist"` |
+| `*mono*` | `"Roboto Mono"` |
+
+### C. Widget-Specific Color & Typography Control Key Matrix
+Different Elementor widgets use different control IDs for text color and typography:
+
+| Widget Slug (`widgetType`) | Text Color Control Key | Typography Group Activation | Font Family Key | Font Size Key |
+|:---|:---|:---|:---|:---|
+| `heading` | `title_color` | `typography_typography: "custom"` | `typography_font_family` | `typography_font_size` |
+| `text-editor` | `text_color` | `typography_typography: "custom"` | `typography_font_family` | `typography_font_size` |
+| `button` / `link` | `button_text_color` | `typography_typography: "custom"` | `typography_font_family` | `typography_font_size` |
+| `icon-list` (Nav Menu) | `text_color` | `typography_typography: "custom"` | `typography_font_family` | `typography_font_size` |
+| `counter` | `number_color` & `title_color` | `typography_number_typography: "custom"` | `typography_number_font_family` | `typography_number_font_size` |
+| `icon-box` | `title_color` | `title_typography_typography: "custom"` | `title_typography_font_family` | `title_typography_font_size` |
+
+> [!IMPORTANT]
+> `typography_typography: "custom"` must ALWAYS be emitted whenever any typography property (`font_family`, `font_size`, `font_weight`, `line_height`, `letter_spacing`, `text_transform`) is specified. Without this flag, Elementor's CSS generator ignores the individual sub-keys.
+
+### D. Background Luminance & High-Contrast Safety
+When text color is omitted by Vision AI:
+1. The compiler evaluates the effective background color (from `node.styles.backgroundColor` or `dir.globals.colors.background`).
+2. If `isDarkColor(effectiveBg)` is `true` (relative luminance < 0.5):
+   - Headings default to `#FFFFFF`.
+   - Body text defaults to `#E2E8F0` or `#94A3B8`.
+   - Action buttons default to `#FFFFFF` (or `#060B05` if the button background is a bright lime/yellow accent `#B7F34C`).
+3. If `isDarkColor(effectiveBg)` is `false` (light background):
+   - Text falls back to `dir.globals.colors.text` or `#182135`.
+
+### E. Background Gradient Engineering
+Elementor Core natively supports linear and radial gradients on containers, canvas page settings, and buttons:
+```json
+{
+  "background_background": "gradient",
+  "background_color": "#1b2248",
+  "background_color_b": "#141b3c",
+  "background_gradient_type": "linear",
+  "background_gradient_angle": { "unit": "deg", "size": 180 },
+  "background_color_stop": { "unit": "%", "size": 0 },
+  "background_color_b_stop": { "unit": "%", "size": 100 }
+}
+```
+Whenever `canvas_bounds.inner_bg_type === 'gradient'` or `section.styles.backgroundGradient` is specified, the compiler emits native Elementor gradient settings instead of flattening to solid `classic`.
+
+### F. Chromatic Fidelity & Element Styling Rules
+1. **No Tailwind / Preset Snapping:** Vision models must never round subtle tones (e.g. pastel peach/apricot/caramel `#e7c69f` / `#deb285`) to highlighter yellow (`#fde047` / `#facc15`).
+2. **Button Rounding & Padding:** Modern buttons default to `8px` rounded corners (or `50px` pill for hero search/CTA buttons). Buttons are never left with sharp `0px` rectangular corners.
+3. **Muted Nav Links:** Navigation links on dark headers use soft slate/grey (`#cbd5e1` / `#94a3b8`) instead of harsh pure `#ffffff`.
+
+---
+
+## 4. Source and Compatibility Specifications
 
 - **Source Archive:** `elementor.zip`; source version: **Elementor Core 4.3.5**.
 - **Per-Widget Profiles:** Located at `server/src/skills/elementor/widgets/*.json`.
@@ -142,7 +240,7 @@ Any alteration to skill prompts, widget profiles, or responsive mappings immedia
 
 ---
 
-## 3. Native Elementor Content-Node Structure
+## 5. Native Elementor Content-Node Structure
 
 ### Container with child widgets
 

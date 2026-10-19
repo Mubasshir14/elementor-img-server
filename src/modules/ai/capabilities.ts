@@ -53,6 +53,27 @@ export const KNOWN_MODEL_CAPABILITIES: Record<string, ModelCapabilityInfo> = {
   },
 
   // Gemini Models
+  'gemini-3.5-flash-lite': {
+    provider: 'gemini',
+    modelId: 'gemini-3.5-flash-lite',
+    supportsImages: true,
+    supportsJson: true,
+    notes: 'High-throughput, fast multimodal vision model with high availability on Google Gemini API.',
+  },
+  'gemini-3.5-flash': {
+    provider: 'gemini',
+    modelId: 'gemini-3.5-flash',
+    supportsImages: true,
+    supportsJson: true,
+    notes: 'Gemini flash vision model.',
+  },
+  'gemini-flash-lite-latest': {
+    provider: 'gemini',
+    modelId: 'gemini-flash-lite-latest',
+    supportsImages: true,
+    supportsJson: true,
+    notes: 'Latest flash lite alias for high availability fallback.',
+  },
   'gemini-3.8-flash': {
     provider: 'gemini',
     modelId: 'gemini-3.8-flash',

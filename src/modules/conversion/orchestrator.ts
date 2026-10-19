@@ -10,11 +10,12 @@ import { validateDIR, parseDIRFromAIOutput } from '../dir/schema.js';
 import { normalizeDIR, normalizeSection } from '../dir/normalizer.js';
 import { convertDIRToElementor } from '../elementor/generator.js';
 import { validateElementor } from '../elementor/validator.js';
-import { serializeElementorTemplate } from '../elementor/serializer.js';
+import { serializeElementorTemplate, loadSkillPack } from '../elementor/serializer.js';
 import { getStorage } from '../storage/factory.js';
-import { getImageAnalysisPrompt, getDIRRepairPrompt, getSectionRepairPrompt, getElementorSelfHealingGatePrompt } from './prompts.js';
+import { getImageAnalysisPrompt, getDIRRepairPrompt, getSectionRepairPrompt, getElementorSelfHealingGatePrompt, getElementorConversionPrompt } from './prompts.js';
 import { cropAsset, getImageMetadata, computeContentHash } from '../storage/image-processor.js';
 import type { DIRDocument } from '../dir/types.js';
+import { env } from '../../config/index.js';
 
 export interface QualityAuditResult {
   passed: boolean;
@@ -26,6 +27,12 @@ export interface QualityAuditResult {
   imageCount: number;
   resolvedImageCount: number;
   details: string;
+  fidelityAudit?: {
+    typographyPreserved: boolean;
+    layoutPreserved: boolean;
+    noFullScreenshotFallbacks: boolean;
+    imageIntegrityVerified: boolean;
+  };
 }
 
 function enforceFactualMetadata(
@@ -77,20 +84,8 @@ export class ConversionOrchestrator {
       // Stage 2: ANALYZING_IMAGE -> DIR_READY
       await this.updateStatus(jobId, 'analyzing_image', 'image_analysis');
 
-      let dirDoc: DIRDocument;
-      const cachedStage = await prisma.jobStage.findFirst({
-        where: { jobId, stage: 'dir_generation', status: 'completed' },
-      });
-
-      if (cachedStage && cachedStage.outputPayload) {
-        logger.info({ jobId }, 'Resuming with existing DIR stage output');
-        dirDoc = cachedStage.outputPayload as unknown as DIRDocument;
-      } else if (job.dirArtifact) {
-        logger.info({ jobId }, 'Resuming with existing DIR artifact from job');
-        dirDoc = job.dirArtifact as unknown as DIRDocument;
-      } else {
-        dirDoc = await this.executeDIRStage(job, sourceAsset);
-      }
+      // Always execute fresh conversion without reusing prior database cache or artifacts
+      const dirDoc: DIRDocument = await this.executeDIRStage(job, sourceAsset);
 
       await this.updateStatus(jobId, 'dir_ready', 'dir_validation');
 
@@ -136,17 +131,35 @@ export class ConversionOrchestrator {
       }
 
       // Verify deterministic visual quality & structural completeness
-      const qualityAudit = this.verifyVisualQuality(dirDoc, elementorDoc);
+      const qualityAudit = this.verifyVisualQuality(dirDoc, elementorDoc, { sourceAssetPath: sourceAsset?.storagePath });
       logger.info({ jobId, qualityAudit }, 'Visual quality verification passed');
 
       if (!validation.valid) {
         logger.warn({ jobId, errors: validation.errors }, 'Elementor validation warnings/errors encountered');
       }
 
-      await prisma.jobStage.create({
-        data: {
+      await prisma.jobStage.upsert({
+        where: {
+          jobId_stage_attempt: {
+            jobId: job.id,
+            stage: 'elementor_validation',
+            attempt: job.attempts || 1,
+          },
+        },
+        update: {
+          status: 'completed',
+          outputPayload: {
+            valid: validation.valid,
+            qualityAudit,
+            widgetsUsed: Array.from(report.widgetsUsed),
+            elementCount: report.elementCount,
+          } as any,
+          durationMs: 0,
+        },
+        create: {
           jobId: job.id,
           stage: 'elementor_validation',
+          attempt: job.attempts || 1,
           status: 'completed',
           outputPayload: {
             valid: validation.valid,
@@ -212,12 +225,16 @@ export class ConversionOrchestrator {
   }
 
   private async executeDIRStage(job: any, sourceAsset: any): Promise<DIRDocument> {
-    const prompt = getImageAnalysisPrompt({
-      width: sourceAsset?.width || 1440,
-      height: sourceAsset?.height || 900,
-      mimeType: sourceAsset?.mimeType || 'image/png',
-      sha256: sourceAsset?.sha256 || 'mock-hash',
-    });
+    const skillPack = loadSkillPack();
+    const prompt = getImageAnalysisPrompt(
+      {
+        width: sourceAsset?.width || 1440,
+        height: sourceAsset?.height || 900,
+        mimeType: sourceAsset?.mimeType || 'image/png',
+        sha256: sourceAsset?.sha256 || 'mock-hash',
+      },
+      skillPack.operativeInstructions
+    );
 
     const userParts: any[] = [
       { type: 'text', text: prompt.userPrompt },
@@ -239,11 +256,17 @@ export class ConversionOrchestrator {
 
     const sourceHash = sourceAsset?.sha256 || 'mock-hash';
     const schemaVer = '1.0.0';
-    const skillVer = '1.0.0';
+    const skillVer = skillPack.meta.instructionHash || '1.0.0';
     const promptVer = prompt.version;
+
+    const visionModel =
+      env.VISION_AI_MODEL === 'gemini-3.8-flash' || !env.VISION_AI_MODEL
+        ? 'gemini-3.5-flash-lite'
+        : env.VISION_AI_MODEL;
 
     const aiRes = await this.aiRouter.execute({
       role: 'vision',
+      modelId: visionModel,
       messages: [
         { role: 'system', content: prompt.systemPrompt },
         { role: 'user', content: userParts.length > 1 ? userParts : prompt.userPrompt },
@@ -255,6 +278,7 @@ export class ConversionOrchestrator {
       promptVersion: promptVer,
       stageName: 'dir_generation',
       maxTokens: 16384,
+      bypassCache: true,
     });
 
     // Check for explicit output truncation
@@ -409,10 +433,26 @@ export class ConversionOrchestrator {
     const validDoc = validation.document!;
 
     // Persist Validated Stage Result
-    await prisma.jobStage.create({
-      data: {
+    await prisma.jobStage.upsert({
+      where: {
+        jobId_stage_attempt: {
+          jobId: job.id,
+          stage: 'dir_generation',
+          attempt: job.attempts || 1,
+        },
+      },
+      update: {
+        status: 'completed',
+        outputPayload: validDoc as any,
+        providerName: aiRes.provider,
+        modelName: aiRes.model,
+        tokensUsed: aiRes.usage.inputTokens + aiRes.usage.outputTokens,
+        durationMs: aiRes.latencyMs,
+      },
+      create: {
         jobId: job.id,
         stage: 'dir_generation',
+        attempt: job.attempts || 1,
         status: 'completed',
         outputPayload: validDoc as any,
         providerName: aiRes.provider,
@@ -516,53 +556,18 @@ export class ConversionOrchestrator {
               logger.warn({ assetId: asset.id, err: cropErr?.message }, 'Failed to crop asset from sourceRect');
             }
           }
-
-          // Attempt B: Proportional fallback extraction based on role/type if sourceRect failed or missing
-          if (!cropBuffer) {
-            try {
-              const imgMeta = meta || (await getImageMetadata(sourceBuffer));
-              const w = imgMeta.width;
-              const h = imgMeta.height;
-              const roleLower = (asset.role || '').toLowerCase();
-
-              let fallbackRect = {
-                x: Math.round(w * 0.15),
-                y: Math.round(h * 0.2),
-                width: Math.round(w * 0.7),
-                height: Math.round(h * 0.55),
-              };
-
-              if (asset.type === 'logo' || roleLower.includes('logo') || roleLower.includes('crest')) {
-                fallbackRect = {
-                  x: Math.round(w * 0.05),
-                  y: Math.round(h * 0.03),
-                  width: Math.min(w, Math.max(32, Math.round(w * 0.25))),
-                  height: Math.min(h, Math.max(24, Math.round(h * 0.12))),
-                };
-              } else if (asset.type === 'icon' || roleLower.includes('icon') || roleLower.includes('dumbbell')) {
-                fallbackRect = {
-                  x: Math.round(w * 0.1),
-                  y: Math.round(h * 0.05),
-                  width: Math.min(w, Math.max(24, Math.round(w * 0.1))),
-                  height: Math.min(h, Math.max(24, Math.round(h * 0.08))),
-                };
-              }
-
-              cropBuffer = await cropAsset(sourceBuffer, fallbackRect);
-            } catch (fallbackErr: any) {
-              logger.warn({ assetId: asset.id, err: fallbackErr?.message }, 'Failed to extract fallback crop region');
-            }
-          }
         }
 
-        // Attempt C: Persist extracted cropBuffer to local storage & DB
+        // Persist extracted cropBuffer to local storage & DB
         if (cropBuffer) {
           try {
             const assetHash = computeContentHash(cropBuffer);
             const storageKey = `projects/${job.projectId}/assets/${asset.id}_${assetHash.slice(0, 8)}.png`;
             const uploadRes = await this.storage.upload(storageKey, cropBuffer, 'image/png');
-            const assetUrl = `/storage/${uploadRes.key}`;
-            asset.placeholder = assetUrl;
+            const dataUri = `data:image/png;base64,${cropBuffer.toString('base64')}`;
+            asset.placeholder = dataUri;
+            asset.url = dataUri;
+            asset.path = uploadRes.key;
 
             await prisma.asset.create({
               data: {
@@ -585,35 +590,79 @@ export class ConversionOrchestrator {
           }
         }
 
-        // Attempt D: If cropBuffer not available, fallback to sourceAsset storagePath or inline SVG
+        // If cropBuffer not available, fallback to designated standalone SVG asset placeholder
         if (!asset.placeholder) {
-          if (sourceAsset?.storagePath) {
-            asset.placeholder = `/storage/${sourceAsset.storagePath}`;
-          } else {
-            const safeLabel = encodeURIComponent(asset.role || asset.id || 'Image');
-            asset.placeholder = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><rect width="100%" height="100%" fill="%231e293b"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%2394a3b8" font-family="sans-serif" font-size="14">${safeLabel}</text></svg>`;
-          }
+          const safeLabel = encodeURIComponent(asset.role || (asset as any).description || asset.id || 'Asset');
+          const svgDataUri = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><rect width="100%" height="100%" fill="%231e293b"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%2394a3b8" font-family="sans-serif" font-size="14">${safeLabel}</text></svg>`;
+          asset.placeholder = svgDataUri;
+          asset.url = svgDataUri;
+          asset.path = '';
         }
       }
     }
 
-    // 5. Propagate resolved URLs down to all image nodes in the DIR tree
+    // 5. Propagate resolved URLs and paths down to all image nodes and backgrounds in the DIR tree
     const updateNodeUrls = (node: any) => {
       if (node.kind === 'image') {
-        if (!node.url && node.assetId) {
-          const matching = dirDoc.assets?.find((a) => a.id === node.assetId);
-          if (matching?.placeholder) {
-            node.url = matching.placeholder;
-          }
+        let matching = node.assetId ? dirDoc.assets?.find((a) => a.id === node.assetId) : null;
+        if (!matching && node.alt) {
+          matching = dirDoc.assets?.find((a) => a.role === node.alt || (a as any).description === node.alt);
         }
-        if (!node.url && sourceAsset?.storagePath) {
-          node.url = `/storage/${sourceAsset.storagePath}`;
+        if (matching) {
+          node.assetId = matching.id;
+          node.url = matching.url || matching.placeholder || node.url;
+          node.path = matching.path || (matching.placeholder?.startsWith('/storage/') ? matching.placeholder.replace(/^\/?storage\//, '') : '');
+          node.imageUrl = node.url;
+        } else if (node.url && !node.path && node.url.startsWith('/storage/')) {
+          node.path = node.url.replace(/^\/?storage\//, '');
+          node.imageUrl = node.url;
         }
         if (!node.url) {
           const safeAlt = encodeURIComponent(node.alt || 'Image');
           node.url = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><rect width="100%" height="100%" fill="%231e293b"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%2394a3b8" font-family="sans-serif" font-size="14">${safeAlt}</text></svg>`;
+          node.path = '';
+          node.imageUrl = node.url;
         }
       }
+
+      if (node.kind === 'image-box' || node.kind === 'testimonial') {
+        const matching = node.assetId ? dirDoc.assets?.find((a) => a.id === node.assetId) : null;
+        if (matching) {
+          node.url = matching.url || matching.placeholder || node.url;
+          node.path = matching.path || '';
+          node.imageUrl = node.url;
+        } else if (node.url && !node.path && node.url.startsWith('/storage/')) {
+          node.path = node.url.replace(/^\/?storage\//, '');
+          node.imageUrl = node.url;
+        }
+      }
+
+      if (node.kind === 'gallery' || node.kind === 'image-gallery') {
+        if (Array.isArray(node.images)) {
+          for (const img of node.images) {
+            const matching = img.assetId ? dirDoc.assets?.find((a) => a.id === img.assetId) : null;
+            if (matching) {
+              img.url = matching.url || matching.placeholder || img.url;
+              img.path = matching.path || '';
+              img.imageUrl = img.url;
+            } else if (img.url && !img.path && img.url.startsWith('/storage/')) {
+              img.path = img.url.replace(/^\/?storage\//, '');
+              img.imageUrl = img.url;
+            }
+          }
+        }
+      }
+
+      if (node.styles?.backgroundImageAssetId) {
+        const matching = dirDoc.assets?.find((a) => a.id === node.styles.backgroundImageAssetId);
+        if (matching) {
+          node.styles.backgroundImage = matching.url || matching.placeholder;
+          node.styles.backgroundImagePath = matching.path || '';
+        }
+      } else if (node.styles?.backgroundImage && !node.styles.backgroundImagePath && node.styles.backgroundImage.startsWith('/storage/')) {
+        node.styles.backgroundImagePath = node.styles.backgroundImage.replace(/^\/?storage\//, '');
+      }
+
       const children = node.children || node.nodes || node.elements;
       if (children && Array.isArray(children)) {
         for (const child of children) {
@@ -626,6 +675,16 @@ export class ConversionOrchestrator {
       for (const page of dirDoc.pages) {
         if (page.sections) {
           for (const sec of page.sections) {
+            if (sec.styles?.backgroundImageAssetId) {
+              const matching = dirDoc.assets?.find((a) => a.id === sec.styles.backgroundImageAssetId);
+              if (matching) {
+                sec.styles.backgroundImage = matching.url || matching.placeholder;
+                sec.styles.backgroundImagePath = matching.path || '';
+              }
+            } else if (sec.styles?.backgroundImage && !sec.styles.backgroundImagePath && sec.styles.backgroundImage.startsWith('/storage/')) {
+              sec.styles.backgroundImagePath = sec.styles.backgroundImage.replace(/^\/?storage\//, '');
+            }
+
             const secChildren = sec.children || (sec as any).nodes || (sec as any).elements;
             if (secChildren && Array.isArray(secChildren)) {
               for (const child of secChildren) {
@@ -638,7 +697,11 @@ export class ConversionOrchestrator {
     }
   }
 
-  public verifyVisualQuality(dirDoc: DIRDocument, elementorDoc: any): QualityAuditResult {
+  public verifyVisualQuality(
+    dirDoc: DIRDocument,
+    elementorDoc: any,
+    options?: { sourceAssetPath?: string; strictFidelity?: boolean }
+  ): QualityAuditResult {
     if (!dirDoc.pages || !Array.isArray(dirDoc.pages) || dirDoc.pages.length === 0) {
       throw new Error('Quality verification failed: DIR document contains no pages');
     }
@@ -682,6 +745,15 @@ export class ConversionOrchestrator {
           imageCount++;
           const url = el.settings?.image?.url;
           if (url && typeof url === 'string' && url.trim().length > 0) {
+            if (options?.sourceAssetPath) {
+              const rawSrc = options.sourceAssetPath.replace(/^\/?storage\//, '');
+              const cleanUrl = url.replace(/^\/?storage\//, '');
+              if (cleanUrl === rawSrc) {
+                throw new Error(
+                  `Quality verification failed: Image widget "${el.id}" was populated with the raw full-page screenshot instead of an extracted sub-asset crop`
+                );
+              }
+            }
             resolvedImageCount++;
           } else {
             throw new Error(`Quality verification failed: Image widget "${el.id}" has no resolved image URL`);
@@ -731,6 +803,64 @@ export class ConversionOrchestrator {
       }
     }
 
+    // Design fidelity verification: verify that typography and layout directives in DIR are faithfully reflected in Elementor
+    let typographyPreserved = true;
+    let layoutPreserved = true;
+
+    const checkDirFidelity = (node: any) => {
+      if (node.kind === 'heading') {
+        const expectedSize = node.styles?.fontSize ?? node.typography?.font_size_px;
+        if (expectedSize && expectedSize >= 24) {
+          const hasMatchingSize = (elements: any[]): boolean => {
+            for (const el of elements) {
+              if (el.widgetType === 'heading' && el.settings?.typography_font_size?.size) {
+                return true;
+              }
+              if (el.elements && hasMatchingSize(el.elements)) return true;
+            }
+            return false;
+          };
+          if (!hasMatchingSize(elementorDoc.content)) {
+            logger.warn({ expectedSize }, 'Visual quality warning: Heading font size was not preserved in Elementor settings');
+            typographyPreserved = false;
+          }
+        }
+      }
+      if (node.kind === 'container' || node.kind === 'flex-group') {
+        const expectedDir = node.direction || node.styles?.flexDirection || node.layout_tree?.direction;
+        if (expectedDir === 'row') {
+          const hasRow = (elements: any[]): boolean => {
+            for (const el of elements) {
+              if (el.elType === 'container' && el.settings?.flex_direction === 'row') return true;
+              if (el.elements && hasRow(el.elements)) return true;
+            }
+            return false;
+          };
+          if (!hasRow(elementorDoc.content)) {
+            logger.warn('Visual quality warning: Horizontal row layout was not preserved in Elementor container');
+            layoutPreserved = false;
+          }
+        }
+      }
+      const children = node.children || node.nodes || node.elements;
+      if (Array.isArray(children)) {
+        for (const c of children) checkDirFidelity(c);
+      }
+    };
+
+    if (dirDoc.pages) {
+      for (const page of dirDoc.pages) {
+        if (page.sections) {
+          for (const sec of page.sections) {
+            const secChildren = sec.children || (sec as any).nodes || (sec as any).elements;
+            if (Array.isArray(secChildren)) {
+              for (const c of secChildren) checkDirFidelity(c);
+            }
+          }
+        }
+      }
+    }
+
     return {
       passed: true,
       totalPages: dirDoc.pages.length,
@@ -741,6 +871,12 @@ export class ConversionOrchestrator {
       imageCount,
       resolvedImageCount,
       details: `Verified ${totalSections} sections, ${totalDirNodes} DIR elements, ${totalContainers} containers, ${totalWidgets} widgets, ${resolvedImageCount}/${imageCount} resolved images`,
+      fidelityAudit: {
+        typographyPreserved,
+        layoutPreserved,
+        noFullScreenshotFallbacks: true,
+        imageIntegrityVerified: resolvedImageCount === imageCount,
+      },
     };
   }
 

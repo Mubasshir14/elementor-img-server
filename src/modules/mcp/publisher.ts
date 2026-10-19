@@ -6,6 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type {
   PublishRequest,
   PublishResult,
@@ -14,6 +15,9 @@ import type {
 import { MCPClient } from './client.js';
 import { logger } from '../../lib/logger.js';
 import { getAuthoritativeElementorVersion } from '../elementor/serializer.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export class MCPPublisher {
   private client: MCPClient;
@@ -236,14 +240,25 @@ export class MCPPublisher {
     return null;
   }
 
-  private findStorageFile(storageUrl: string): string | null {
-    const cleanKey = storageUrl.replace(/^\/?storage\//, '');
+  private findStorageFile(storageUrlOrPath: string): string | null {
+    if (!storageUrlOrPath || typeof storageUrlOrPath !== 'string') return null;
+    if (path.isAbsolute(storageUrlOrPath) && fs.existsSync(storageUrlOrPath)) {
+      return storageUrlOrPath;
+    }
+    let cleanKey = storageUrlOrPath.replace(/^https?:\/\/[^\/]+\//, '');
+    cleanKey = cleanKey.replace(/^\/?storage\//, '').replace(/^uploads\//, '');
     const candidates = [
+      path.resolve(process.cwd(), storageUrlOrPath),
       path.resolve(process.cwd(), 'storage/uploads', cleanKey),
       path.resolve(process.cwd(), 'server/storage/uploads', cleanKey),
       path.resolve(process.cwd(), '../server/storage/uploads', cleanKey),
       path.resolve(process.cwd(), 'storage', cleanKey),
       path.resolve(process.cwd(), 'server/storage', cleanKey),
+      path.resolve(process.cwd(), 'storage/uploads', storageUrlOrPath),
+      path.resolve(process.cwd(), 'server/storage/uploads', storageUrlOrPath),
+      path.resolve(__dirname, '../../../storage/uploads', cleanKey),
+      path.resolve(__dirname, '../../../../server/storage/uploads', cleanKey),
+      path.resolve(__dirname, '../../../../storage/uploads', cleanKey),
     ];
     for (const c of candidates) {
       if (fs.existsSync(c)) return c;
@@ -268,31 +283,59 @@ export class MCPPublisher {
       const handleImageUrl = async (imgObj: any) => {
         if (!imgObj || typeof imgObj !== 'object') return;
         const rawUrl = imgObj.url;
-        if (!rawUrl || typeof rawUrl !== 'string') return;
+        const filePath = imgObj.path;
+        if (!rawUrl && !filePath) return;
 
-        // If it's already a full http/https url that is NOT localhost mock, skip
-        if (rawUrl.startsWith('http') && !rawUrl.includes('mock.elementor.local') && !rawUrl.includes('/storage/')) {
+        // If it's already a full http/https url that is NOT localhost mock or local storage, skip
+        if (rawUrl && typeof rawUrl === 'string' && rawUrl.startsWith('http') && !rawUrl.includes('mock.elementor.local') && !rawUrl.includes('/storage/')) {
+          delete imgObj.path;
           return;
         }
 
-        if (uploadedCache.has(rawUrl)) {
-          const cached = uploadedCache.get(rawUrl)!;
+        const cacheKey = filePath || rawUrl;
+        if (cacheKey && uploadedCache.has(cacheKey)) {
+          const cached = uploadedCache.get(cacheKey)!;
           imgObj.url = cached.url;
           if (cached.id) imgObj.id = cached.id;
+          delete imgObj.path;
           return;
         }
 
-        const localPath = this.findStorageFile(rawUrl);
-        if (localPath && hasAuth) {
+        let localPath: string | null = null;
+        if (filePath) {
+          localPath = this.findStorageFile(filePath);
+        }
+        if (!localPath && rawUrl) {
+          localPath = this.findStorageFile(rawUrl);
+        }
+        let fileBuf: Buffer | null = null;
+        let fileName = 'asset.png';
+        let mimeType = 'image/png';
+
+        if (localPath) {
           try {
-            const fileBuf = fs.readFileSync(localPath);
-            const fileName = path.basename(localPath);
-            const mimeType = fileName.endsWith('.jpg') || fileName.endsWith('.jpeg')
+            fileBuf = fs.readFileSync(localPath);
+            fileName = path.basename(localPath);
+            mimeType = fileName.endsWith('.jpg') || fileName.endsWith('.jpeg')
               ? 'image/jpeg'
               : fileName.endsWith('.svg')
               ? 'image/svg+xml'
               : 'image/png';
+          } catch {}
+        } else if (rawUrl && typeof rawUrl === 'string' && rawUrl.startsWith('data:image/')) {
+          try {
+            const matches = rawUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+            if (matches) {
+              mimeType = matches[1];
+              fileBuf = Buffer.from(matches[2], 'base64');
+              const ext = mimeType.includes('svg') ? 'svg' : mimeType.includes('jpeg') ? 'jpg' : 'png';
+              fileName = `${imgObj.id || 'asset'}_${Date.now()}.${ext}`;
+            }
+          } catch {}
+        }
 
+        if (fileBuf && hasAuth) {
+          try {
             const res = await fetch(`${baseSiteUrl}/wp-json/wp/v2/media`, {
               method: 'POST',
               headers: {
@@ -300,37 +343,47 @@ export class MCPPublisher {
                 'Content-Type': mimeType,
                 'Content-Disposition': `attachment; filename="${fileName}"`,
               },
-              body: fileBuf,
+              body: new Uint8Array(fileBuf),
             });
 
             if (res.ok) {
               const data = (await res.json()) as any;
-              uploadedCache.set(rawUrl, { id: data.id, url: data.source_url });
+              const result = { id: data.id, url: data.source_url };
+              if (cacheKey) uploadedCache.set(cacheKey, result);
+              if (rawUrl) uploadedCache.set(rawUrl, result);
+              if (filePath) uploadedCache.set(filePath, result);
               imgObj.url = data.source_url;
               imgObj.id = data.id;
-              logger.info({ rawUrl, newUrl: data.source_url, id: data.id }, 'Successfully uploaded asset to WordPress Media Library');
+              delete imgObj.path;
+              logger.info({ rawUrl: rawUrl?.slice(0, 40), filePath, newUrl: data.source_url, id: data.id }, 'Successfully uploaded asset to WordPress Media Library');
               return;
             } else {
-              logger.warn({ status: res.status, rawUrl }, 'WordPress media upload failed');
+              logger.warn({ status: res.status, rawUrl: rawUrl?.slice(0, 40), filePath }, 'WordPress media upload failed');
             }
           } catch (uploadErr: any) {
-            logger.warn({ err: uploadErr?.message, rawUrl }, 'Error uploading asset to WordPress');
+            logger.warn({ err: uploadErr?.message, rawUrl: rawUrl?.slice(0, 40), filePath }, 'Error uploading asset to WordPress');
           }
         }
 
         // Fallback: If not uploaded to WP or auth unavailable, never leave naked /storage/... path
-        if (rawUrl.startsWith('/storage/') || rawUrl.startsWith('storage/')) {
+        if (rawUrl && (rawUrl.startsWith('/storage/') || rawUrl.startsWith('storage/'))) {
           imgObj.url = `${baseSiteUrl}/${rawUrl.replace(/^\//, '')}`;
         }
+        delete imgObj.path;
       };
 
-      if (el.settings) {
-        if (el.settings.image) await handleImageUrl(el.settings.image);
-        if (el.settings.background_image) await handleImageUrl(el.settings.background_image);
-        if (el.settings.testimonial_image) await handleImageUrl(el.settings.testimonial_image);
-        if (Array.isArray(el.settings.wp_gallery)) {
-          for (const item of el.settings.wp_gallery) {
-            await handleImageUrl(item);
+      if (el.settings && typeof el.settings === 'object') {
+        for (const [key, val] of Object.entries(el.settings)) {
+          if (val && typeof val === 'object') {
+            if ('url' in val || 'path' in val) {
+              await handleImageUrl(val);
+            } else if (Array.isArray(val)) {
+              for (const item of val) {
+                if (item && typeof item === 'object' && ('url' in item || 'path' in item)) {
+                  await handleImageUrl(item);
+                }
+              }
+            }
           }
         }
       }
