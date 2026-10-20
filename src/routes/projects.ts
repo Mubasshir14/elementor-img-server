@@ -24,6 +24,7 @@ projectsRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
       orderBy: { updatedAt: 'desc' },
       include: {
         conversionJobs: {
+          include: { stages: { orderBy: { createdAt: 'asc' } } },
           orderBy: { createdAt: 'desc' },
           take: 1,
         },
@@ -68,6 +69,7 @@ projectsRouter.get('/:id', async (req: Request, res: Response, next: NextFunctio
       include: {
         assets: true,
         conversionJobs: {
+          include: { stages: { orderBy: { createdAt: 'asc' } } },
           orderBy: { createdAt: 'desc' },
         },
       },

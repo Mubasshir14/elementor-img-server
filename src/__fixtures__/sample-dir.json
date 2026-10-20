@@ -45,6 +45,7 @@
   "assets": [
     {
       "id": "asset-logo-1",
+      "url": "https://example.com/fixtures/asset-logo-1.png",
       "type": "logo",
       "role": "brand-logo",
       "description": "Company logo in header",
@@ -52,6 +53,7 @@
     },
     {
       "id": "asset-hero-1",
+      "url": "https://example.com/fixtures/asset-hero-1.png",
       "type": "image",
       "role": "hero-background",
       "sourceRect": { "x": 0, "y": 80, "width": 1440, "height": 600 },
@@ -60,6 +62,7 @@
     },
     {
       "id": "asset-feature-1",
+      "url": "https://example.com/fixtures/asset-feature-1.png",
       "type": "icon",
       "role": "feature-icon",
       "description": "Feature section icon - speed/performance",

@@ -8,7 +8,6 @@ import {
   AICapability,
   AIHealthCheckResult,
   AIMessage,
-  AIMessageContentPart,
   AIProvider,
   AIProviderAdapter,
   AIRequest,
@@ -16,6 +15,7 @@ import {
 } from '../types.js';
 import { AIProviderError } from '../../../lib/errors.js';
 import { logger } from '../../../lib/logger.js';
+import { resolveInlineImage } from '../../storage/image-input.js';
 import { env } from '../../../config/index.js';
 
 export interface GeminiAdapterOptions {
@@ -78,11 +78,8 @@ export class GeminiAdapter implements AIProviderAdapter {
       options.baseUrl || 'https://generativelanguage.googleapis.com/v1beta'
     ).replace(/\/$/, '');
     this.defaultModel =
-      options.defaultModel ||
-      env.GEMINI_MODEL ||
-      process.env.GEMINI_MODEL ||
-      'gemini-3.5-flash-lite';
-    this.defaultTimeoutMs = options.defaultTimeoutMs || 60000;
+      options.defaultModel || env.GEMINI_MODEL;
+    this.defaultTimeoutMs = options.defaultTimeoutMs || env.AI_REQUEST_TIMEOUT_MS;
   }
 
   getCapabilities(): AICapability[] {
@@ -160,66 +157,7 @@ export class GeminiAdapter implements AIProviderAdapter {
   private async resolveImageToInlineData(
     imageUrl: string
   ): Promise<{ mimeType: string; data: string }> {
-    // 1. Check if it's already a base64 data URI
-    const dataUriMatch = imageUrl.match(/^data:([^;]+);base64,(.+)$/s);
-    if (dataUriMatch) {
-      return {
-        mimeType: dataUriMatch[1],
-        data: dataUriMatch[2].replace(/\s/g, ''),
-      };
-    }
-
-    // 2. If it's a raw base64 string
-    if (/^[A-Za-z0-9+/=]+$/.test(imageUrl.slice(0, 100)) && imageUrl.length > 200) {
-      return {
-        mimeType: 'image/png',
-        data: imageUrl.replace(/\s/g, ''),
-      };
-    }
-
-    // 3. If it's an HTTP/HTTPS URL, download it
-    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
-      const res = await fetch(imageUrl);
-      if (!res.ok) {
-        throw new Error(`Failed to fetch image from URL: ${imageUrl} (${res.status})`);
-      }
-      const contentType = res.headers.get('content-type') || 'image/png';
-      const arrayBuffer = await res.arrayBuffer();
-      const base64Data = Buffer.from(arrayBuffer).toString('base64');
-      return {
-        mimeType: contentType,
-        data: base64Data,
-      };
-    }
-
-    // 4. If it's a local filesystem path
-    if (
-      typeof imageUrl === 'string' &&
-      (imageUrl.startsWith('./') ||
-        imageUrl.startsWith('/') ||
-        /^[a-zA-Z]:[\\/]/.test(imageUrl) ||
-        imageUrl.startsWith('storage'))
-    ) {
-      try {
-        const fs = await import('fs');
-        const path = await import('path');
-        const resolved = path.resolve(imageUrl);
-        if (fs.existsSync(resolved)) {
-          const buf = await fs.promises.readFile(resolved);
-          const ext = path.extname(resolved).toLowerCase();
-          const mimeType =
-            ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'image/png';
-          return {
-            mimeType,
-            data: buf.toString('base64'),
-          };
-        }
-      } catch {
-        // Fall through
-      }
-    }
-
-    throw new Error('Unsupported image URL format for Gemini inlineData');
+    return resolveInlineImage(imageUrl, this.defaultTimeoutMs);
   }
 
   /**
@@ -292,12 +230,10 @@ export class GeminiAdapter implements AIProviderAdapter {
       );
     }
 
-    const configuredModel =
-      process.env.GEMINI_MODEL ||
-      env.GEMINI_MODEL ||
-      this.defaultModel ||
-      'gemini-3.5-flash-lite';
-    const model = req.modelId || configuredModel;
+    const model = req.modelId || this.defaultModel;
+    if (!/^(?:models\/)?gemini-[a-zA-Z0-9.-]+$/.test(model)) {
+      throw new AIProviderError('Invalid Gemini model identifier; check GEMINI_MODEL / VISION_AI_MODEL', this.name, false);
+    }
     const timeoutMs = req.timeout || this.defaultTimeoutMs;
     const startTime = Date.now();
 
@@ -335,7 +271,7 @@ export class GeminiAdapter implements AIProviderAdapter {
       requestPayload.systemInstruction = systemInstruction;
     }
 
-    let cleanModelName = model.replace(/^models\//, '');
+    const cleanModelName = model.replace(/^models\//, '');
 
     const maxAttempts = 2;
     let attempt = 0;
@@ -401,7 +337,7 @@ export class GeminiAdapter implements AIProviderAdapter {
             errorMessage.toLowerCase().includes('not supported for generatecontent');
 
           if (isNotFound) {
-            errorMessage = `[NOT_FOUND] models/${cleanModelName} is not found for API version v1beta, or is not supported for generateContent. Please update GEMINI_MODEL / VISION_AI_MODEL in .env to a supported model (e.g. gemini-3.8-flash).`;
+            errorMessage = `[NOT_FOUND] models/${cleanModelName} is not found for API version v1beta, or is not supported for generateContent. Please update GEMINI_MODEL / VISION_AI_MODEL in .env to a supported model (see the provider model catalog).`;
           }
 
           const isRateLimited =
@@ -441,29 +377,6 @@ export class GeminiAdapter implements AIProviderAdapter {
               },
               'Gemini API transient error encountered; executing bounded retry with backoff'
             );
-
-            const isHighDemandOrQuota =
-              response.status === 503 ||
-              response.status === 429 ||
-              errorMessage.toLowerCase().includes('high demand') ||
-              errorMessage.toLowerCase().includes('quota') ||
-              errorMessage.toLowerCase().includes('resource_exhausted');
-
-            if (isHighDemandOrQuota) {
-              const fallbackCandidates = [
-                'gemini-3.5-flash-lite',
-                'gemini-flash-lite-latest',
-                'gemini-3.5-flash',
-              ];
-              const fallbackModel =
-                fallbackCandidates.find((m) => m !== cleanModelName) ||
-                'gemini-3.5-flash-lite';
-              logger.warn(
-                { from: cleanModelName, to: fallbackModel, attempt, maxAttempts },
-                'Gemini model is experiencing high demand (503) or quota exhaustion (429); failing over to available flash lite sibling model for bounded retry'
-              );
-              cleanModelName = fallbackModel;
-            }
 
             clearTimeout(timeoutHandle);
             await new Promise((res) => setTimeout(res, waitMs));
@@ -508,7 +421,7 @@ export class GeminiAdapter implements AIProviderAdapter {
           String(data.error.message || '').toLowerCase().includes('not supported');
 
         const message = isNotFound
-          ? `[NOT_FOUND] models/${cleanModelName} is not found for API version v1beta, or is not supported for generateContent. Set GEMINI_MODEL in .env to a supported model (e.g. gemini-3.8-flash).`
+          ? `[NOT_FOUND] models/${cleanModelName} is not found for API version v1beta, or is not supported for generateContent. Set GEMINI_MODEL in .env to a supported model (see the provider model catalog).`
           : `Gemini error: ${data.error.message || 'Unknown error'}`;
 
         throw new AIProviderError(

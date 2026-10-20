@@ -102,8 +102,8 @@ describe('Navbar Structure & Layout Alignment', () => {
     expect(headerElement.settings.flex_direction).toBe('row');
     expect(headerElement.settings.flex_justify_content).toBe('space-between');
     expect(headerElement.settings.flex_align_items).toBe('center');
-    expect(headerElement.settings.flex_direction_tablet).toBe('row');
-    expect(headerElement.settings.flex_direction_mobile).toBe('row');
+    expect(headerElement.settings.flex_direction_tablet).toBeUndefined();
+    expect(headerElement.settings.flex_direction_mobile).toBeUndefined();
 
     // 2. Elements rendered
     expect(headerElement.elements).toHaveLength(3);
@@ -176,8 +176,8 @@ describe('Navbar Structure & Layout Alignment', () => {
 
     expect(actionsContainer.elType).toBe('container');
     expect(actionsContainer.settings.flex_direction).toBe('row');
-    expect(actionsContainer.settings.flex_direction_tablet).toBe('row');
-    expect(actionsContainer.settings.flex_direction_mobile).toBe('row');
+    expect(actionsContainer.settings.flex_direction_tablet).toBeUndefined();
+    expect(actionsContainer.settings.flex_direction_mobile).toBeUndefined();
     expect(actionsContainer.settings.flex_justify_content).toBe('flex-end');
     expect(actionsContainer.settings.flex_grow).toBe(0);
   });
@@ -246,7 +246,7 @@ describe('Navbar Structure & Layout Alignment', () => {
     const logoEl = headerElement.elements[0];
     expect(logoEl.widgetType).toBe('image');
     expect(logoEl.settings.width).toEqual({ unit: 'px', size: 156 });
-    expect(logoEl.settings.height.size).toBeLessThanOrEqual(52); // bounded height
+    expect(logoEl.settings.height.size).toBe(72); // preserve observed height
     expect(logoEl.settings.align).toBe('left');
     expect(logoEl.settings._flex_shrink).toBe(0);
     expect(logoEl.settings._flex_grow).toBe(0);

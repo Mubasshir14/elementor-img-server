@@ -374,7 +374,7 @@ describe('Four-Stage Fidelity Pipeline & Boss Feedback Specifications', () => {
       const { document } = convertDIRToElementor(assetDIR);
       const imgWidget = document.content[0].elements[0];
       expect(imgWidget.widgetType).toBe('image');
-      expect(imgWidget.settings.image_fit).toBe('contain');
+      expect(imgWidget.settings['object-fit']).toBe('contain');
     });
   });
 

@@ -43,6 +43,7 @@
   "assets": [
     {
       "id": "asset_logo",
+      "url": "https://example.com/fixtures/asset_logo.png",
       "type": "logo",
       "role": "brand-logo",
       "description": "Company brand logo",
@@ -50,6 +51,7 @@
     },
     {
       "id": "asset_hero_img",
+      "url": "https://example.com/fixtures/asset_hero_img.png",
       "type": "image",
       "role": "hero-illustration",
       "description": "Hero section graphic",

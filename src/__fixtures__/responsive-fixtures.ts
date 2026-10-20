@@ -1075,3 +1075,9 @@ export const multiViewportReconciledFixture: DIRDocument = {
     }
   ]
 };
+
+// These compiler-only fixtures represent already-resolved assets and explicitly
+// specified responsive designs; asset extraction is covered separately.
+for (const fixture of [darkGymHeroFixture, lightFintechHeroFixture, multiSectionLandingFixture, narrowTallPageFixture, multiViewportReconciledFixture]) {
+  for (const asset of fixture.assets) asset.url = `https://example.com/fixtures/${asset.id}.png`;
+}

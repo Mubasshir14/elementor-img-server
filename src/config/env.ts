@@ -77,7 +77,7 @@ export const envSchema = z.object({
 
   GEMINI_API_KEY: z.string().optional().default(''),
   ENABLE_GEMINI: booleanString(true),
-  GEMINI_MODEL: z.string().optional().default('gemini-3.5-flash'),
+  GEMINI_MODEL: z.string().trim().min(1).default('gemini-3.8-flash'),
 
   OPENROUTER_API_KEY: z.string().optional().default(''),
   OPENROUTER_MODEL: z
@@ -104,7 +104,7 @@ export const envSchema = z.object({
     .enum(['gemini', 'groq', 'openrouter', 'mock'])
     .optional()
     .default('gemini'),
-  VISION_AI_MODEL: z.string().optional().default('gemini-3.5-flash'),
+  VISION_AI_MODEL: z.string().trim().optional().default(''),
 
   STRUCTURE_AI_PROVIDER: z
     .enum(['groq', 'gemini', 'openrouter', 'mock'])
@@ -208,6 +208,7 @@ export function printConfigDiagnostics(): void {
       openRouterModel: env.OPENROUTER_MODEL,
       timeoutMs: env.AI_REQUEST_TIMEOUT_MS,
       visionProvider: env.VISION_AI_PROVIDER,
+      visionModel: env.VISION_AI_MODEL || (env.VISION_AI_PROVIDER === 'gemini' ? env.GEMINI_MODEL : env.VISION_AI_PROVIDER === 'groq' ? env.GROQ_MODEL : env.OPENROUTER_MODEL),
       structureProvider: env.STRUCTURE_AI_PROVIDER,
       reviewProvider: env.REVIEW_AI_PROVIDER,
       runLiveTests: env.RUN_LIVE_AI_TESTS,

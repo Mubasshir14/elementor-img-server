@@ -134,13 +134,13 @@ describe('Resilience & Fallback Policy (Gemini 503 & Cache Isolation)', () => {
       await expect(
         router.execute({
           role: 'vision',
-          messages: [{ role: 'user', content: 'analyze image' }],
+          messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://example.com/test.png' } }] }],
           modelId: 'gemini-3.8-flash',
         })
       ).rejects.toThrow(/Gemini 503 Service Unavailable/);
     });
 
-    it('falls back to secondary real vision provider when available and image-capable', async () => {
+    it('preserves the configured vision provider on failure even when an alternative exists', async () => {
       const router = new AIRouter();
       router.setAllowNonMockInTest(true);
 
@@ -178,14 +178,11 @@ describe('Resilience & Fallback Policy (Gemini 503 & Cache Isolation)', () => {
         model: 'google/gemini-2.0-flash-001',
       });
 
-      const response = await router.execute({
-        role: 'vision',
-        messages: [{ role: 'user', content: 'analyze image' }],
+      await expect(router.execute({
+        role: 'vision', messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://example.com/test.png' } }] }],
         modelId: 'gemini-3.8-flash',
-      });
-
-      expect(response.provider).toBe('openrouter');
-      expect(response.content).toContain('1.0.0');
+      })).rejects.toThrow('Gemini 503');
+      expect(mockOpenRouterAdapter.sendRequest).not.toHaveBeenCalled();
     });
 
     it('never routes images to text-only Groq models (e.g. openai/gpt-oss-120b)', async () => {

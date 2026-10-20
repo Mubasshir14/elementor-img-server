@@ -98,6 +98,9 @@ export const BUILT_IN_CORE_WIDGETS: WidgetProfile[] = [
     controls: [
       { id: 'image', type: 'media', default: { url: '', id: '' }, label: 'Choose Image' },
       { id: 'image_size', type: 'select', default: 'full', label: 'Image Size' },
+      { id: 'object-fit', type: 'select', responsive: true, label: 'Object Fit' },
+      { id: 'height', type: 'slider', responsive: true, label: 'Height' },
+      { id: 'image_border_radius', type: 'dimensions', responsive: true, label: 'Image Radius' },
       { id: 'align', type: 'choose', default: 'center', responsive: true, label: 'Alignment' },
       { id: 'caption_source', type: 'select', default: 'none', label: 'Caption' },
       { id: 'caption', type: 'text', label: 'Custom Caption' },
@@ -140,7 +143,7 @@ export const BUILT_IN_CORE_WIDGETS: WidgetProfile[] = [
       { id: 'text_color', type: 'color', label: 'Alternative Text Color' },
       { id: 'background_color', type: 'color', label: 'Background Color' },
       { id: 'border_radius', type: 'dimensions', responsive: true, label: 'Border Radius' },
-      { id: 'button_padding', type: 'dimensions', responsive: true, label: 'Padding' },
+      { id: 'text_padding', type: 'dimensions', responsive: true, label: 'Padding' },
       ...TYPOGRAPHY_CONTROLS,
     ],
   },
@@ -644,6 +647,20 @@ export const BUILT_IN_CORE_WIDGETS: WidgetProfile[] = [
       { id: 'slides_to_show', type: 'select', default: '3', label: 'Slides to Show' },
       { id: 'navigation', type: 'select', default: 'both', label: 'Navigation' },
       { id: 'autoplay', type: 'switcher', default: 'no', label: 'Autoplay' },
+    ],
+  },
+  // Classic Core widgets already emitted by the compiler and present in the source index.
+  {
+    slug: 'toggle', name: 'Toggle', category: 'general', supportedInCore: true,
+    description: 'Classic toggle accordion.', defaults: { tabs: [] },
+    controls: [{ id: 'tabs', type: 'repeater', label: 'Items' }],
+  },
+  {
+    slug: 'image-gallery', name: 'Basic Gallery', category: 'general', supportedInCore: true,
+    description: 'Classic Core image gallery.', defaults: { wp_gallery: [], gallery_columns: '3' },
+    controls: [
+      { id: 'wp_gallery', type: 'gallery', label: 'Images' },
+      { id: 'gallery_columns', type: 'select', label: 'Columns' },
     ],
   },
 ];

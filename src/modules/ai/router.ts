@@ -52,8 +52,8 @@ export class AIRouter {
       }));
     }
     const geminiKey = process.env.GEMINI_API_KEY || env.GEMINI_API_KEY;
-    if (env.ENABLE_GEMINI || geminiKey) {
-      this.adapters.set('gemini', new GeminiAdapter({ apiKey: geminiKey || 'placeholder-key' }));
+    if (env.ENABLE_GEMINI && geminiKey) {
+      this.adapters.set('gemini', new GeminiAdapter({ apiKey: geminiKey }));
     }
     if (env.OPENROUTER_API_KEY) {
       this.adapters.set('openrouter', new OpenRouterAdapter());
@@ -75,7 +75,7 @@ export class AIRouter {
   public getAdapter(provider: AIProvider): AIProviderAdapter {
     const adapter = this.adapters.get(provider);
     if (!adapter) {
-      return this.adapters.get('mock')!;
+      throw new AIProviderError(`AI provider '${provider}' is not configured`, provider, false);
     }
     return adapter;
   }
@@ -103,59 +103,18 @@ export class AIRouter {
    * Resolves the most appropriate provider for the requested role,
    * strictly verifying image input capabilities for vision requests.
    */
-  public resolveProviderForRole(role: AIRole, modelOverride?: string): AIProvider {
+  public resolveProviderForRole(role: AIRole, _modelOverride?: string): AIProvider {
     if (!env.RUN_LIVE_AI_TESTS && env.NODE_ENV === 'test' && !this.allowNonMockInTest) {
       return 'mock';
     }
 
     if (role === 'vision') {
-      // 1. Check explicit vision provider override if configured
-      if (env.VISION_AI_PROVIDER && this.isProviderAvailable(env.VISION_AI_PROVIDER as AIProvider)) {
-        const prov = env.VISION_AI_PROVIDER as AIProvider;
-        // Verify Groq vision models specifically:
-        if (prov === 'groq') {
-          const candidateModel = modelOverride || env.AI_MODEL || 'openai/gpt-oss-120b';
-          if (isModelImageCapable(candidateModel, 'groq')) {
-            return 'groq';
-          }
-          // If Groq model is text-only (e.g. openai/gpt-oss-120b or llama-3.3-70b), fall through to Gemini!
-          logger.info({ candidateModel }, 'Groq model is text-only; routing vision task to image-capable provider');
-        } else {
-          return prov;
-        }
+      if (env.AI_PROVIDER === 'mock') return 'mock';
+      const provider = env.VISION_AI_PROVIDER;
+      if (!this.isProviderAvailable(provider)) {
+        throw new AIProviderError(`Configured vision provider '${provider}' is unavailable; check its API key, enable flag and cooldown`, provider, false);
       }
-
-      // 2. Default to Gemini for vision tasks if available (Gemini is verified image-capable)
-      if (env.ENABLE_GEMINI && this.isProviderAvailable('gemini')) {
-        return 'gemini';
-      }
-
-      // 3. Check OpenRouter if available with verified vision model
-      if (this.isProviderAvailable('openrouter')) {
-        const candidateModel = modelOverride || process.env.OPENROUTER_MODEL || '';
-        if (isModelImageCapable(candidateModel, 'openrouter')) {
-          return 'openrouter';
-        }
-      }
-
-      // 4. Check if primary AI_PROVIDER is Groq with a verified vision model
-      if (env.AI_PROVIDER === 'groq' && this.isProviderAvailable('groq')) {
-        const candidateModel = modelOverride || env.AI_MODEL || '';
-        if (isModelImageCapable(candidateModel, 'groq')) {
-          return 'groq';
-        }
-      }
-
-      if ((env.NODE_ENV === 'test' && !this.allowNonMockInTest) || env.AI_PROVIDER === 'mock' || process.env.ALLOW_MOCK_FALLBACK === 'true') {
-        return 'mock';
-      }
-
-      throw new AIProviderError(
-        'No image-capable AI provider is configured or available for vision tasks. Check GEMINI_API_KEY, OPENROUTER_API_KEY, or model configuration.',
-        'gemini',
-        false,
-        { role: 'vision' }
-      );
+      return provider;
     }
 
     const isMockPermitted = (env.NODE_ENV === 'test' && !this.allowNonMockInTest) || env.AI_PROVIDER === 'mock' || process.env.ALLOW_MOCK_FALLBACK === 'true';
@@ -281,17 +240,15 @@ export class AIRouter {
 
     const providerName = this.resolveProviderForRole(req.role, req.modelId);
     const adapter = this.getAdapter(providerName);
-    const targetModel =
-      req.modelId ||
-      (providerName === 'gemini'
-        ? (req.role === 'vision'
-            ? (process.env.VISION_AI_MODEL || env.VISION_AI_MODEL || process.env.GEMINI_MODEL || env.GEMINI_MODEL || 'gemini-3.5-flash-lite')
-            : (process.env.GEMINI_MODEL || env.GEMINI_MODEL || 'gemini-3.5-flash-lite'))
-        : providerName === 'groq'
-        ? (req.role === 'structure'
-            ? (process.env.STRUCTURE_AI_MODEL || env.STRUCTURE_AI_MODEL || process.env.GROQ_MODEL || env.GROQ_MODEL || process.env.AI_MODEL || env.AI_MODEL || 'openai/gpt-oss-120b')
-            : (process.env.GROQ_MODEL || env.GROQ_MODEL || process.env.AI_MODEL || env.AI_MODEL || 'openai/gpt-oss-120b'))
-        : ((adapter as any).defaultModel || 'default'));
+    const providerModel = providerName === 'gemini' ? env.GEMINI_MODEL
+      : providerName === 'groq' ? (env.GROQ_MODEL || env.AI_MODEL)
+      : providerName === 'openrouter' ? env.OPENROUTER_MODEL : 'mock';
+    const roleModel = req.role === 'vision' ? env.VISION_AI_MODEL
+      : req.role === 'structure' ? env.STRUCTURE_AI_MODEL : env.REVIEW_AI_MODEL;
+    const targetModel = req.modelId || roleModel || providerModel;
+    if (!targetModel?.trim()) throw new AIProviderError('AI model is not configured', providerName, false);
+    if (req.role === 'vision' && !hasImages) throw new AIProviderError('Vision requests require an attached screenshot', providerName, false);
+    logger.info({ role: req.role, provider: providerName, model: targetModel }, 'Resolved AI configuration');
 
     const modelKey = `${providerName}:${targetModel}`;
 
@@ -371,6 +328,8 @@ export class AIRouter {
         this.setProviderCooldown(providerName, retryAfterSec * 1000, 'Rate limit / quota exhaustion');
       }
 
+      if (req.role === 'vision') throw err; // Retry the configured model; never substitute a different vision model.
+
       // Bounded fallback: For retryable errors or JSON generation failure, fallback to at most ONE secondary provider
       const isRetryable = err.isRetryable ?? (
         err.statusCode === 429 ||
@@ -385,21 +344,7 @@ export class AIRouter {
         const isMockPermitted = (env.NODE_ENV === 'test' && !this.allowNonMockInTest) || env.AI_PROVIDER === 'mock' || process.env.ALLOW_MOCK_FALLBACK === 'true';
 
         // 1. Attempt real fallback if an eligible image-capable/text-capable provider is available
-        if (req.role === 'vision') {
-          const alt = this.findAlternativeVisionProvider(providerName, req.modelId);
-          if (alt) {
-            logger.warn(
-              { from: providerName, to: alt.provider, model: alt.model, error: err.message },
-              'Primary vision provider failed with retryable error; attempting single bounded fallback to secondary real vision provider'
-            );
-            try {
-              const fallbackAdapter = this.getAdapter(alt.provider);
-              return await fallbackAdapter.sendRequest({ ...req, modelId: alt.model });
-            } catch (fallbackErr: any) {
-              logger.error({ altProvider: alt.provider, error: fallbackErr.message }, 'Secondary real vision provider also failed');
-            }
-          }
-        } else {
+        {
           const alt = this.findAlternativeTextProvider(providerName);
           if (alt) {
             logger.warn(

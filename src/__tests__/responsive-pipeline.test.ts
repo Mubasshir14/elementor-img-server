@@ -90,8 +90,9 @@ describe('Responsive Pipeline & Fixtures Test Suite', () => {
 
       // Check responsive reflow on the row container
       const splitRow = heroContainer.elements[0];
-      expect(splitRow.settings?.flex_direction_mobile).toBe('column');
-      expect(splitRow.settings?.flex_direction_tablet).toBe('column');
+      expect(splitRow.settings?.flex_direction_mobile).toBeUndefined();
+      expect(splitRow.settings?.flex_direction).toBe('row');
+      expect(splitRow.settings?.flex_direction_tablet).toBeUndefined();
 
       // Check counter widget generation
       const mediaCol = splitRow.elements[1];
@@ -108,11 +109,11 @@ describe('Responsive Pipeline & Fixtures Test Suite', () => {
       const h1Widget = copyCol.elements[0];
       expect(h1Widget.widgetType).toBe('heading');
       expect(h1Widget.settings?.typography_font_size).toEqual({ unit: 'px', size: 54 });
-      expect(h1Widget.settings?.typography_font_size_tablet?.size).toBeLessThan(54);
-      expect(h1Widget.settings?.typography_font_size_mobile?.size).toBeLessThan(h1Widget.settings?.typography_font_size_tablet?.size);
+      expect(h1Widget.settings?.typography_font_size_tablet).toBeUndefined();
+      expect(h1Widget.settings?.typography_font_size_mobile).toBeUndefined();
 
       // Check width clamping on mobile for >360px container
-      expect(copyCol.settings?.width_mobile).toEqual({ unit: '%', size: 100 });
+      expect(copyCol.settings?.width_mobile).toBeUndefined();
     });
 
     it('converts lightFintechHeroFixture with light canvas and badge container', () => {
@@ -126,9 +127,10 @@ describe('Responsive Pipeline & Fixtures Test Suite', () => {
       const row = heroContainer.elements[0];
       const leftCol = row.elements[0];
       const btnGroup = leftCol.elements[3];
-      expect(btnGroup.settings?.flex_direction_mobile).toBe('column');
+      expect(btnGroup.settings?.flex_direction_mobile).toBeUndefined();
+      expect(btnGroup.settings?.flex_direction).toBe('row');
 
-      expect(report.responsiveStats?.inferredOverridesCount).toBeGreaterThanOrEqual(1);
+      expect(report.responsiveStats?.inferredOverridesCount).toBe(0);
     });
 
     it('converts multiSectionLandingFixture with 3-column grid responsive reflow', () => {
@@ -143,8 +145,8 @@ describe('Responsive Pipeline & Fixtures Test Suite', () => {
       // Grid settings: desktop 3 cols -> tablet 2 cols -> mobile 1 col
       expect(gridContainer.settings?.container_type).toBe('grid');
       expect(gridContainer.settings?.grid_columns_grid).toEqual({ unit: 'fr', size: 3 });
-      expect(gridContainer.settings?.grid_columns_grid_tablet).toEqual({ unit: 'fr', size: 2 });
-      expect(gridContainer.settings?.grid_columns_grid_mobile).toEqual({ unit: 'fr', size: 1 });
+      expect(gridContainer.settings?.grid_columns_grid_tablet).toBeUndefined();
+      expect(gridContainer.settings?.grid_columns_grid_mobile).toBeUndefined();
       expect(gridContainer.elements.length).toBe(3); // 3 cards
     });
 
@@ -156,9 +158,9 @@ describe('Responsive Pipeline & Fixtures Test Suite', () => {
 
       // Verify padding scaling on sections
       for (const section of document.content) {
-        expect(section.settings?.padding_tablet).toBeDefined();
-        expect(section.settings?.padding_mobile).toBeDefined();
-        expect(Number(section.settings?.padding_mobile?.top)).toBeLessThanOrEqual(Number(section.settings?.padding?.top));
+        expect(section.settings?.padding_tablet).toBeUndefined();
+        expect(section.settings?.padding_mobile).toBeUndefined();
+        expect(section.settings?.padding).toBeDefined();
       }
     });
 
@@ -200,7 +202,7 @@ describe('Responsive Pipeline & Fixtures Test Suite', () => {
 
       // Button padding override on mobile
       const btn = textCol.elements[2];
-      expect(btn.settings?.padding_mobile).toEqual({
+      expect(btn.settings?.text_padding_mobile).toEqual({
         unit: 'px',
         top: '14',
         bottom: '14',
@@ -213,8 +215,8 @@ describe('Responsive Pipeline & Fixtures Test Suite', () => {
     });
   });
 
-  describe('4. Viewport Emulation & Zero-Horizontal-Overflow Verification', () => {
-    it('verifies all 5 fixtures produce mobile-safe width clampings (<=390px or 100%)', () => {
+  describe('4. Responsive contract (static settings, no browser rendering)', () => {
+    it('emits only explicit mobile widths and leaves unobserved widths inherited', () => {
       const fixtures = [
         darkGymHeroFixture,
         lightFintechHeroFixture,
@@ -233,10 +235,9 @@ describe('Responsive Pipeline & Fixtures Test Suite', () => {
             const desktopWidth = typeof el.settings.width === 'number' ? el.settings.width : el.settings.width?.size;
             if (desktopWidth && desktopWidth > 360) {
               const mobileWidth = el.settings.width_mobile;
-              expect(mobileWidth).toBeDefined();
-              if (mobileWidth.unit === '%') {
+              if (mobileWidth && mobileWidth.unit === '%') {
                 expect(mobileWidth.size).toBeLessThanOrEqual(100);
-              } else if (mobileWidth.unit === 'px') {
+              } else if (mobileWidth && mobileWidth.unit === 'px') {
                 expect(mobileWidth.size).toBeLessThanOrEqual(390);
               }
             }

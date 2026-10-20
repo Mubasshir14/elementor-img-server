@@ -1,3 +1,5 @@
+> **October 20, 2026 conversion update:** See [CONVERSION_PIPELINE.md](CONVERSION_PIPELINE.md) for verified fixes, deployment requirements, test results and the exact changed files. Visual fidelity is unmeasured until a real Elementor render comparison is performed. Run both the API and the conversion worker; uploads only enqueue jobs.
+
 # Design2Elementor (IMG_PROJECT) — Comprehensive System Documentation & Technical Audit
 
 > **Repository:** `e:\BrainGIG Internship\Mubasshir\IMG_PROJECT`  

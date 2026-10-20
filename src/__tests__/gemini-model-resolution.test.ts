@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GeminiAdapter } from '../modules/ai/providers/gemini.js';
 import { AIRouter } from '../modules/ai/router.js';
@@ -19,7 +20,7 @@ describe('Gemini Model Resolution & 404 Bounded Handling', () => {
   describe('1. Model Configuration & Capability Registry', () => {
     it('env defaults specify gemini-3.x-flash for GEMINI_MODEL and VISION_AI_MODEL', () => {
       expect(env.GEMINI_MODEL).toMatch(/gemini-3\.[58]-flash/);
-      expect(env.VISION_AI_MODEL).toMatch(/gemini-3\.[58]-flash/);
+      expect(env.VISION_AI_MODEL || env.GEMINI_MODEL).toMatch(/gemini-3\.[58]-flash/);
     });
 
     it('gemini-3.8-flash is registered as image-capable in AI capabilities', () => {
@@ -141,7 +142,7 @@ describe('Gemini Model Resolution & 404 Bounded Handling', () => {
         await adapter.sendRequest({
           role: 'vision',
           modelId: 'gemini-1.5-pro',
-          messages: [{ role: 'user', content: 'Test prompt' }],
+          messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${(await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).png().toBuffer()).toString('base64')}` } }] }],
         });
       } catch (err: any) {
         caughtError = err;
@@ -152,7 +153,7 @@ describe('Gemini Model Resolution & 404 Bounded Handling', () => {
       expect(caughtError?.isRetryable).toBe(false);
       expect(caughtError?.message).toContain('[NOT_FOUND]');
       expect(caughtError?.message).toContain('gemini-1.5-pro');
-      expect(caughtError?.message).toContain('gemini-3.8-flash');
+      expect(caughtError?.message).toContain('GEMINI_MODEL');
     });
   });
 
@@ -185,7 +186,7 @@ describe('Gemini Model Resolution & 404 Bounded Handling', () => {
         router.execute({
           role: 'vision',
           modelId: 'gemini-1.5-pro',
-          messages: [{ role: 'user', content: 'Test prompt' }],
+          messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${(await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).png().toBuffer()).toString('base64')}` } }] }],
           bypassCache: true,
         })
       ).rejects.toThrow(/NOT_FOUND|invalid or not found/);
@@ -198,7 +199,7 @@ describe('Gemini Model Resolution & 404 Bounded Handling', () => {
         router.execute({
           role: 'vision',
           modelId: 'gemini-1.5-pro',
-          messages: [{ role: 'user', content: 'Test prompt' }],
+          messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${(await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).png().toBuffer()).toString('base64')}` } }] }],
           bypassCache: true,
         })
       ).rejects.toThrow(/is invalid or not found/);
@@ -233,7 +234,7 @@ describe('Gemini Model Resolution & 404 Bounded Handling', () => {
       const result = await router.execute({
         role: 'vision',
         modelId: 'gemini-3.8-flash',
-        messages: [{ role: 'user', content: 'Test prompt' }],
+        messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${(await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).png().toBuffer()).toString('base64')}` } }] }],
         bypassCache: true,
       });
 

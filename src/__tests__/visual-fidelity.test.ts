@@ -59,6 +59,7 @@ describe('Visual Fidelity Rectification & Layout Fidelity', () => {
     assets: [
       {
         id: 'asset_hero_graphic',
+      url: 'https://example.com/fixtures/hero.png',
         type: 'image',
         role: '3D green glass flower artwork',
         confidence: 0.95,
@@ -274,6 +275,6 @@ describe('Visual Fidelity Rectification & Layout Fidelity', () => {
 
     expect(imageWidget).toBeDefined();
     expect(imageWidget?.settings.image.url).toBe('/storage/projects/p1/assets/asset_hero_graphic.png');
-    expect(imageWidget?.settings.image.id).toBe('asset_hero_graphic');
+    expect(imageWidget?.settings.image.id).toBe('');
   });
 });

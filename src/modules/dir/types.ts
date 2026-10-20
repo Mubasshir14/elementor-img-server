@@ -179,6 +179,11 @@ export type DIRSectionRole =
   | 'generic';
 
 export interface DIRSection {
+  /** Pixel bounds in the original uploaded image, top-left origin. */
+  sourceRect?: DIRRect;
+  observedProperties?: string[];
+  inferredProperties?: string[];
+  uncertainty?: string[];
   id: string;
   role: DIRSectionRole;
   label?: string;
@@ -227,6 +232,10 @@ export type DIRNodeKind =
   | 'unknown';
 
 export interface DIRNodeBase {
+  sourceRect?: DIRRect;
+  observedProperties?: string[];
+  inferredProperties?: string[];
+  uncertainty?: string[];
   id: string;
   kind: DIRNodeKind;
   label?: string;
@@ -422,6 +431,39 @@ export interface DIRBadgeNode extends DIRNodeBase {
   text: string;
 }
 
+export interface DIRMediaReference {
+  assetId?: string;
+  url?: string;
+  imageUrl?: string;
+  path?: string;
+}
+export interface DIRImageBoxNode extends DIRNodeBase, DIRMediaReference {
+  kind: 'image-box';
+  title?: string;
+  text?: string;
+  description?: string;
+  link?: string;
+  imagePosition?: 'top' | 'left' | 'right';
+}
+export interface DIRTestimonialNode extends DIRNodeBase, DIRMediaReference {
+  kind: 'testimonial';
+  content?: string;
+  text?: string;
+  name?: string;
+  author?: string;
+  job?: string;
+  role?: string;
+}
+export interface DIRToggleNode extends DIRNodeBase {
+  kind: 'toggle';
+  items: Array<{ title: string; children: DIRNode[] }>;
+}
+export interface DIRGalleryNode extends DIRNodeBase {
+  kind: 'gallery' | 'image-gallery';
+  images: DIRMediaReference[];
+  columns?: number;
+}
+
 export interface DIRUnknownNode extends DIRNodeBase {
   kind: 'unknown';
   description?: string;
@@ -457,12 +499,17 @@ export type DIRNode =
   | DIRAccordionNode
   | DIRRatingNode
   | DIRBadgeNode
+  | DIRImageBoxNode
+  | DIRTestimonialNode
+  | DIRToggleNode
+  | DIRGalleryNode
   | DIRUnknownNode;
 
 // ─── Styles ──────────────────────────────────────────────────────────
 
 export interface DIRStyles {
-  // Layout
+  // Layout (numeric dimensions are pixels; percentage dimensions use strings)
+  gridColumns?: number;
   width?: string | number;
   height?: string | number;
   minWidth?: string | number;

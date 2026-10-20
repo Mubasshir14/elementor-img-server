@@ -6,11 +6,10 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { uploadMiddleware } from '../middleware/upload.js';
-import { validateImage, getImageMetadata, computeContentHash } from '../modules/storage/image-processor.js';
+import { validateImage, computeContentHash } from '../modules/storage/image-processor.js';
 import { getStorage } from '../modules/storage/factory.js';
 import { NotFoundError, ValidationError, QuotaError } from '../lib/errors.js';
 import { env } from '../config/index.js';
-import { getConversionOrchestrator } from '../modules/conversion/orchestrator.js';
 
 export const uploadRouter = Router();
 uploadRouter.use(requireAuth);
@@ -40,8 +39,9 @@ async function processUpload(
     }
 
     const buffer = file.buffer;
+    let validated;
     try {
-      await validateImage(buffer);
+      validated = await validateImage(buffer);
     } catch (valErr: any) {
       throw new ValidationError(`Invalid image upload: ${valErr.message}`);
     }
@@ -77,21 +77,21 @@ async function processUpload(
     }
 
     const hash = computeContentHash(buffer);
-    const metadata = await getImageMetadata(buffer);
+    const metadata = validated;
     const storage = getStorage();
 
     const storageKey = `projects/${targetProjectId}/originals/${hash}_${file.originalname}`;
-    const uploadRes = await storage.upload(storageKey, buffer, file.mimetype);
+    const uploadRes = await storage.upload(storageKey, buffer, validated.mimeType);
 
     // Create Asset record
     const asset = await prisma.asset.create({
       data: {
         projectId: targetProjectId,
         fileName: file.originalname,
-        mimeType: file.mimetype,
+        mimeType: validated.mimeType,
         sizeBytes: BigInt(buffer.length),
         sha256: hash,
-        storageProvider: 'local',
+        storageProvider: env.STORAGE_PROVIDER,
         storagePath: uploadRes.key,
         width: metadata.width,
         height: metadata.height,
@@ -113,8 +113,7 @@ async function processUpload(
       },
     });
 
-    // Kick off conversion asynchronously
-    getConversionOrchestrator().processJob(job.id).catch(() => {});
+    // The worker atomically claims queued jobs; do not run a second conversion here.
 
     res.status(201).json({
       success: true,

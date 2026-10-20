@@ -20,12 +20,12 @@ export const MAX_PIXELS_LIMIT = 100_000_000; // 100 MP
 /**
  * Supported MIME types for uploaded design screenshots.
  */
-export const SUPPORTED_MIME_TYPES = ['image/png', 'image/jpeg'] as const;
+export const SUPPORTED_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
 
 /**
  * Inspect magic bytes directly from buffer to ensure the payload is authentic.
  */
-export function checkMagicBytes(buffer: Buffer): 'image/png' | 'image/jpeg' | null {
+export function checkMagicBytes(buffer: Buffer): 'image/png' | 'image/jpeg' | 'image/webp' | null {
   if (buffer.length >= 8) {
     // PNG signature: 89 50 4E 47 0D 0A 1A 0A
     if (
@@ -49,6 +49,7 @@ export function checkMagicBytes(buffer: Buffer): 'image/png' | 'image/jpeg' | nu
     }
   }
 
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
   return null;
 }
 
@@ -63,7 +64,7 @@ export function computeContentHash(buffer: Buffer): string {
  * Validates an image buffer for security and formatting constraints:
  * - Checks file size against UPLOAD_MAX_BYTES
  * - Performs MIME type validation using file-type inspection of actual bytes
- * - Verifies image magic bytes for authentic PNG/JPEG format
+ * - Verifies image magic bytes for authentic PNG/JPEG/WebP format
  * - Protects against decompression bombs by enforcing a strict 100 MP limit
  * - Ensures image dimensions are valid and readable
  */
@@ -90,7 +91,7 @@ export async function validateImage(buffer: Buffer): Promise<ImageValidationResu
 
   if (!SUPPORTED_MIME_TYPES.includes(detectedType.mime as any)) {
     throw new ValidationError(
-      `Unsupported image format '${detectedType.mime}'. Only PNG and JPEG images are allowed.`
+      `Unsupported image format '${detectedType.mime}'. Only PNG, JPEG and WebP images are allowed.`
     );
   }
 
@@ -119,6 +120,11 @@ export async function validateImage(buffer: Buffer): Promise<ImageValidationResu
     logger.warn({ err: error }, 'Failed to parse image with sharp');
     throw new ValidationError(`Corrupt or unreadable image file: ${msg}`);
   }
+
+  if ((metadata.pages ?? 1) > 1) throw new ValidationError('Animated or multi-page images are not supported');
+  // Decode pixels as well as the header, so truncated files cannot reach vision.
+  try { await sharp(buffer, { limitInputPixels: MAX_PIXELS_LIMIT, failOn: 'warning' }).stats(); }
+  catch { throw new ValidationError('Corrupt or unreadable image pixel data'); }
 
   const width = metadata.width;
   const height = metadata.height;
@@ -168,7 +174,7 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata> {
 }
 
 /**
- * Creates an optimized normalized JPEG copy resized for AI vision model analysis.
+ * Creates a lossless normalized PNG copy resized for AI vision model analysis.
  * Downscales images exceeding maxWidth while preserving aspect ratio.
  */
 export async function createAnalysisCopy(
@@ -196,10 +202,7 @@ export async function createAnalysisCopy(
   }
 
   const processedBuffer = await pipeline
-    .jpeg({
-      quality: 85,
-      mozjpeg: true,
-    })
+    .png()
     .toBuffer();
 
   const processedMeta = await sharp(processedBuffer).metadata();
@@ -208,7 +211,7 @@ export async function createAnalysisCopy(
     buffer: processedBuffer,
     width: processedMeta.width ?? metadata.width,
     height: processedMeta.height ?? metadata.height,
-    mimeType: 'image/jpeg',
+    mimeType: 'image/png',
   };
 }
 
@@ -242,9 +245,10 @@ export async function createTiles(
   tileHeight = 1200,
   overlap = 100
 ): Promise<ImageTile[]> {
-  const meta = await sharp(buffer, {
-    limitInputPixels: MAX_PIXELS_LIMIT,
-  }).metadata();
+  if (!Number.isInteger(tileHeight) || tileHeight <= 0 || !Number.isInteger(overlap) || overlap < 0 || overlap >= tileHeight) {
+    throw new ValidationError('Tile height must be positive and overlap must be smaller than tile height');
+  }
+  const meta = await sharp(buffer, { limitInputPixels: MAX_PIXELS_LIMIT }).metadata();
 
   const width = meta.width;
   const height = meta.height;
@@ -256,12 +260,13 @@ export async function createTiles(
   // If the image is shorter than or equal to tileHeight, return single tile
   if (height <= tileHeight) {
     const tileBuffer = await sharp(buffer, { limitInputPixels: MAX_PIXELS_LIMIT })
-      .jpeg({ quality: 90, mozjpeg: true })
+      .png()
       .toBuffer();
 
     return [
       {
         buffer: tileBuffer,
+        width,
         index: 0,
         yOffset: 0,
         height,
@@ -296,11 +301,12 @@ export async function createTiles(
         width: width,
         height: spec.height,
       })
-      .jpeg({ quality: 90, mozjpeg: true })
+      .png()
       .toBuffer();
 
     tiles.push({
       buffer: tileBuffer,
+      width,
       index: i,
       yOffset: spec.yOffset,
       height: spec.height,
@@ -319,6 +325,7 @@ export async function cropAsset(
   sourceBuffer: Buffer,
   rect: { x: number; y: number; width: number; height: number }
 ): Promise<Buffer> {
+  if (!Object.values(rect).every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) throw new ValidationError('Invalid asset crop rectangle');
   const meta = await sharp(sourceBuffer, { limitInputPixels: MAX_PIXELS_LIMIT }).metadata();
   const imgWidth = meta.width || 1440;
   const imgHeight = meta.height || 900;

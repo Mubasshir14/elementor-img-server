@@ -227,6 +227,7 @@ export interface ConversionDiagnostic {
 }
 
 export interface ConversionReport {
+  nodeElementIds?: Record<string, string>;
   widgetsUsed: string[];
   unsupportedFeatures: string[];
   warnings: string[];

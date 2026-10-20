@@ -9,7 +9,7 @@
 import { loadRootSkillInstructions } from '../elementor/serializer.js';
 
 export const PROMPT_VERSIONS = {
-  IMAGE_ANALYSIS: 'v2.1.0',
+  IMAGE_ANALYSIS: 'v3.0.0',
   ELEMENTOR_CONVERSION: 'v2.0.0',
   ELEMENTOR_SELF_HEALING: 'v1.0.0',
   DIR_REPAIR: 'v1.1.0',
@@ -66,7 +66,7 @@ export function getImageAnalysisPrompt(
   ].join(', ');
 
   const tilingContext = imageInfo.isTiled
-    ? `TILING CONTEXT: This is vertical slice ${imageInfo.tileIndex ?? 0 + 1} of ${imageInfo.totalTiles ?? 1} with an overlap of ${imageInfo.overlapY ?? 0}px. Identify sections within this slice and note partial sections near top/bottom boundaries.`
+    ? `TILING CONTEXT: This is vertical slice ${(imageInfo.tileIndex ?? 0) + 1} of ${imageInfo.totalTiles ?? 1} with an overlap of ${imageInfo.overlapY ?? 0}px. Identify sections within this slice and note partial sections near top/bottom boundaries.`
     : `SINGLE IMAGE: This is the full webpage screenshot (${imageInfo.width}x${imageInfo.height}px). Analyze the full vertical hierarchy.`;
 
   const systemPrompt = `You are an expert design-to-code vision system specialized in website layout understanding for native Elementor conversion.
@@ -78,13 +78,20 @@ ${operativeSkill}
 ` : ''}Your task is to analyze the provided webpage screenshot and generate a Design Intermediate Representation (DIR) JSON document.
 Output MUST be strict, valid JSON with NO commentary, NO markdown fences, and NO conversational text.
 
+MEASUREMENT CONTRACT (takes precedence over later examples):
+- All sourceRect bounds use pixels of THIS supplied image (${imageInfo.width}x${imageInfo.height}), top-left origin. Never use normalized 0-1000 coordinates. Numeric styles dimensions are pixels; percentages must be strings like "45%".
+- Every section and layout node MUST have sourceRect. Image nodes should also carry sourceRect and a corresponding assets entry. Preserve nested groups and measured column widths.
+- Record observedProperties, inferredProperties and uncertainty as optional string arrays on sections/nodes. A single desktop screenshot does not establish tablet/mobile arrangements; omit responsiveOverrides unless supported, and explain any inference.
+- Transcribe only visible text; do not invent missing or illegible text. Do not invent assets or navigation destinations.
+- For tiles, use tile-local coordinates; the server maps them to original-image coordinates. Preserve partially visible boundary sections with their visible bounds for overlap reconciliation.
+
 1. CANVAS ISOLATION RULE (MANDATORY):
 - Uploaded design images often contain an outer presentation background (e.g. solid pastel blue/grey, desk wallpaper), a device frame (laptop bezel, browser window mockup with fake tabs/dots, tablet frame), or drop shadows around a card.
-- YOU MUST TOTALLY IGNORE THE OUTER PRESENTATION FRAME AND MOCKUP BACKGROUND!
+- Only isolate an outer presentation frame when it is visibly present. Do not invent one.
 - The inner webpage bounding box MUST be treated as the root canvas (100% width).
 - In the root document and in every section, you MUST populate "canvas_bounds":
   {
-    "crop_mockup": true,
+    "crop_mockup": false,
     "inner_bg_type": "gradient" | "solid",
     "primary_hex": "<hex>",
     "secondary_hex": "<hex>",
@@ -96,15 +103,15 @@ STAGE A (PERCEPTION) vs STAGE B (CANONICAL DIR):
 - STAGE B: Assemble these observations into a strict DIRDocument v1.0.0.
 - When responsive behavior is observed or inferred (e.g. multi-column desktops reflowing to stacked mobile columns), you may supply optional "responsiveOverrides" on any node or section:
   "responsiveOverrides": {
-    "tablet": { "direction": "column", "fontSize": 32 },
-    "mobile": { "direction": "column", "fontSize": 24, "padding": { "top": 16, "bottom": 16, "left": 16, "right": 16 } }
+    "tablet": { "flexDirection": "column", "fontSize": 32 },
+    "mobile": { "flexDirection": "column", "fontSize": 24, "padding": { "top": 16, "bottom": 16, "left": 16, "right": 16 } }
   }
 
 DIR SCHEMA REQUIREMENTS:
 1. Root object must contain:
    - "version": "1.0.0"
    - "canvas_bounds": {
-       "crop_mockup": true,
+       "crop_mockup": false,
        "inner_bg_type": "gradient" | "solid",
        "primary_hex": "<hex>",
        "secondary_hex": "<hex>",
@@ -172,7 +179,7 @@ DIR SCHEMA REQUIREMENTS:
              "label": "<descriptive-name>",
              "confidence": <0.0-1.0>,
              "canvas_bounds": {
-               "crop_mockup": true,
+               "crop_mockup": false,
                "inner_bg_type": "gradient" | "solid",
                "primary_hex": "<hex>",
                "secondary_hex": "<hex>",
@@ -253,7 +260,7 @@ CRITICAL VISUAL FIDELITY & LAYOUT ACCURACY:
   - BACKGROUND GRADIENTS: Inspect if the background has a gradient, radial aura, or smooth vertical transition (e.g. shifting from royal navy #1B2248 at top to deep midnight navy #141B3C at bottom).
     When observed, YOU MUST populate:
     "canvas_bounds": {
-      "crop_mockup": true,
+      "crop_mockup": false,
       "inner_bg_type": "gradient",
       "primary_hex": "#1B2248",
       "secondary_hex": "#141B3C",
@@ -337,7 +344,7 @@ NODE REQUIREMENTS:
 CONFIDENCE SCORING:
 - Assign 0.9-1.0 for clearly legible headers, buttons, prominent text, and distinct background cards.
 - Assign 0.6-0.8 for subtle typography, ambiguous icons, or inferred responsive flex directions.
-- Assign below 0.6 only if visual evidence is partially occluded. Do not invent non-existent copy; use safe generic placeholders when unclear.`;
+- Assign below 0.6 only if visual evidence is partially occluded. Do not invent non-existent copy. Leave illegible text empty and record uncertainty.`;
 
   const userPrompt = `${tilingContext}
 

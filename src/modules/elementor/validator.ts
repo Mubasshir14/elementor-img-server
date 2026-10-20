@@ -127,7 +127,7 @@ export class ElementorValidator {
           stats.widgetTypeCounts[element.widgetType] = (stats.widgetTypeCounts[element.widgetType] || 0) + 1;
 
           if (!this.registry.has(element.widgetType)) {
-            warnings.push({
+            errors.push({
               path: `${path}.widgetType`,
               message: `Unknown or unregistered widgetType "${element.widgetType}"`,
               code: 'UNKNOWN_WIDGET_TYPE',
@@ -150,7 +150,7 @@ export class ElementorValidator {
       }
 
       // Check settings
-      if (element.settings && typeof element.settings !== 'object') {
+      if (!element.settings || typeof element.settings !== 'object' || Array.isArray(element.settings)) {
         errors.push({
           path: `${path}.settings`,
           message: 'Settings must be an object',
@@ -165,6 +165,10 @@ export class ElementorValidator {
           elementId: element.id,
         });
       }
+
+      if (!Array.isArray(element.elements)) errors.push({ path: `${path}.elements`, message: 'Element children must be an array', code: 'INVALID_CHILDREN' });
+      if (element.elType === 'widget' && element.elements?.length) errors.push({ path, message: 'Widgets cannot contain layout elements', code: 'WIDGET_CHILDREN' });
+      if (element.widgetType === 'image' && (typeof element.settings?.image?.url !== 'string' || !element.settings.image.url.trim())) errors.push({ path, message: 'Image requires a resolved URL', code: 'MISSING_IMAGE' });
 
       // Traverse children
       if (Array.isArray(element.elements)) {

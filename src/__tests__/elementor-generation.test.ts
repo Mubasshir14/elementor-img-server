@@ -289,7 +289,7 @@ describe('Elementor Generation', () => {
       expect(imageWidget.settings.image).toBeDefined();
       expect(imageWidget.settings.image.url).toBe('http://localhost:3000/storage/projects/p1/assets/asset-hero-1.png');
       expect(imageWidget.settings.image.path).toBe('projects/p1/assets/asset-hero-1.png');
-      expect(imageWidget.settings.image.id).toBe('asset-hero-1');
+      expect(imageWidget.settings.image.id).toBe('');
     });
 
     it('should preserve path on background_image when present in container styles', () => {

@@ -62,6 +62,7 @@ export interface ImageValidationResult {
 }
 
 export interface ImageTile {
+  width: number;
   buffer: Buffer;
   index: number;
   yOffset: number;

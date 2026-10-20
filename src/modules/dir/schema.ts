@@ -27,6 +27,7 @@ const dirCorners = z.object({
 }).strict();
 
 const dirStyles = z.object({
+  gridColumns: z.number().int().positive().optional(),
   // Layout
   width: z.union([z.string(), z.number()]).optional(),
   height: z.union([z.string(), z.number()]).optional(),
@@ -95,7 +96,7 @@ const nodeKinds: DIRNodeKind[] = [
   'container', 'flex-group', 'grid-group', 'heading', 'text', 'button',
   'image', 'icon', 'icon-text', 'link', 'list', 'list-item', 'divider',
   'spacer', 'card', 'form', 'input', 'video', 'map', 'social-icons',
-  'counter', 'progress-bar', 'tabs', 'accordion', 'rating', 'badge', 'unknown'
+  'counter', 'progress-bar', 'tabs', 'accordion', 'rating', 'badge', 'image-box', 'testimonial', 'toggle', 'gallery', 'image-gallery', 'unknown'
 ];
 
 const sectionRoles: DIRSectionRole[] = [
@@ -152,6 +153,10 @@ const dirFormDetailsSchema = z.object({
 }).strict();
 
 const baseNodeFields = {
+  sourceRect: dirRect.optional(),
+  observedProperties: z.array(z.string()).optional(),
+  inferredProperties: z.array(z.string()).optional(),
+  uncertainty: z.array(z.string()).optional(),
   id: z.string().min(1),
   kind: z.enum(nodeKinds as [string, ...string[]]),
   label: z.string().optional(),
@@ -165,6 +170,11 @@ const baseNodeFields = {
   form_details: dirFormDetailsSchema.optional(),
   composite_graphic_asset: z.boolean().optional(),
   layout_tree: z.record(z.any()).optional(),
+};
+
+const mediaReferenceFields = {
+  assetId: z.string().optional(), url: z.string().optional(),
+  imageUrl: z.string().optional(), path: z.string().optional(),
 };
 
 // Lazy recursive node schema
@@ -387,6 +397,23 @@ const dirNodeSchema: z.ZodType<any> = z.lazy(() =>
       kind: z.literal('badge'),
       text: z.string(),
     }).strict(),
+    z.object({ ...baseNodeFields, ...mediaReferenceFields, kind: z.literal('image-box'),
+      title: z.string().optional(), text: z.string().optional(), description: z.string().optional(),
+      link: z.string().optional(), imagePosition: z.enum(['top','left','right']).optional(),
+    }).strict(),
+    z.object({ ...baseNodeFields, ...mediaReferenceFields, kind: z.literal('testimonial'),
+      content: z.string().optional(), text: z.string().optional(), name: z.string().optional(),
+      author: z.string().optional(), job: z.string().optional(), role: z.string().optional(),
+    }).strict(),
+    z.object({ ...baseNodeFields, kind: z.literal('toggle'),
+      items: z.array(z.object({ title: z.string(), children: z.array(dirNodeSchema) }).strict()),
+    }).strict(),
+    z.object({ ...baseNodeFields, kind: z.literal('gallery'),
+      images: z.array(z.object(mediaReferenceFields).strict()), columns: z.number().int().positive().optional(),
+    }).strict(),
+    z.object({ ...baseNodeFields, kind: z.literal('image-gallery'),
+      images: z.array(z.object(mediaReferenceFields).strict()), columns: z.number().int().positive().optional(),
+    }).strict(),
     // Unknown
     z.object({
       ...baseNodeFields,
@@ -421,6 +448,10 @@ const dirAssetSchema = z.object({
 // ─── Section Schema ──────────────────────────────────────────────────
 
 const dirSectionSchema = z.object({
+  sourceRect: dirRect.optional(),
+  observedProperties: z.array(z.string()).optional(),
+  inferredProperties: z.array(z.string()).optional(),
+  uncertainty: z.array(z.string()).optional(),
   id: z.string().min(1),
   role: z.enum(sectionRoles as [string, ...string[]]),
   label: z.string().optional(),
@@ -580,6 +611,7 @@ export function validateDIR(data: unknown): DIRValidationResult {
 
   // Check asset references
   const assetIds = new Set(doc.assets.map((a: { id: string }) => a.id));
+  if (assetIds.size !== doc.assets.length) errors.push({path:'assets',message:'Duplicate asset IDs',code:'DUPLICATE_ASSET_IDS'});
   function checkAssetRefs(nodes: any[]) {
     for (const node of nodes) {
       if (node.kind === 'image' && node.assetId && !assetIds.has(node.assetId)) {

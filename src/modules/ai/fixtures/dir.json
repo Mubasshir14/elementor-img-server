@@ -28,6 +28,7 @@
   "assets": [
     {
       "id": "asset_hero_img",
+      "url": "https://example.com/fixtures/asset_hero_img.png",
       "type": "image",
       "role": "hero-illustration",
       "confidence": 0.95

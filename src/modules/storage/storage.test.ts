@@ -241,7 +241,7 @@ describe('Storage Module', () => {
       expect(metadata.hasAlpha).toBe(true);
     });
 
-    it('should create an analysis copy normalized to JPEG and resized if necessary', async () => {
+    it('should create an analysis copy normalized to lossless PNG and resized if necessary', async () => {
       // Wide image 2400x800
       const wideImage = await sharp({
         create: {
@@ -255,10 +255,10 @@ describe('Storage Module', () => {
         .toBuffer();
 
       const result = await createAnalysisCopy(wideImage, 1920);
-      expect(result.mimeType).toBe('image/jpeg');
+      expect(result.mimeType).toBe('image/png');
       expect(result.width).toBe(1920);
       expect(result.height).toBe(640); // 2400:800 -> 1920:640
-      expect(checkMagicBytes(result.buffer)).toBe('image/jpeg');
+      expect(checkMagicBytes(result.buffer)).toBe('image/png');
     });
 
     it('should create square thumbnails focusing on top area', async () => {

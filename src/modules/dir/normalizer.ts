@@ -608,7 +608,7 @@ export function normalizeSection(rawSection: unknown): any {
     sec.children = [];
   }
 
-  if (sec.role === 'header' || sec.role === 'navigation' || sec.id?.includes('header') || sec.id?.includes('nav')) {
+  if (!sec.sourceRect && (sec.role === 'header' || sec.role === 'navigation' || sec.id?.includes('header') || sec.id?.includes('nav'))) {
     sec = normalizeHeaderSection(sec);
   }
 

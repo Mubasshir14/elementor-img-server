@@ -3,6 +3,7 @@
  * Coordinates image analysis -> DIR generation -> validation & repair -> Elementor compilation -> artifact persistence
  */
 
+import { Prisma, type StageName, type JobStatus } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { getAIRouter } from '../ai/router.js';
@@ -12,9 +13,12 @@ import { convertDIRToElementor } from '../elementor/generator.js';
 import { validateElementor } from '../elementor/validator.js';
 import { serializeElementorTemplate, loadSkillPack } from '../elementor/serializer.js';
 import { getStorage } from '../storage/factory.js';
-import { getImageAnalysisPrompt, getDIRRepairPrompt, getSectionRepairPrompt, getElementorSelfHealingGatePrompt, getElementorConversionPrompt } from './prompts.js';
-import { cropAsset, getImageMetadata, computeContentHash } from '../storage/image-processor.js';
+import { getImageAnalysisPrompt, getDIRRepairPrompt, getSectionRepairPrompt, getElementorSelfHealingGatePrompt } from './prompts.js';
+import { cropAsset, computeContentHash } from '../storage/image-processor.js';
 import type { DIRDocument } from '../dir/types.js';
+import { loadSourceImage, resolveInlineImage, type SourceImage } from '../storage/image-input.js';
+import { prepareAnalysisImages, mergeTileDocuments, type AnalysisTile } from './preprocessing.js';
+import { auditCorrespondence } from './structural-audit.js';
 import { env } from '../../config/index.js';
 
 export interface QualityAuditResult {
@@ -27,6 +31,9 @@ export interface QualityAuditResult {
   imageCount: number;
   resolvedImageCount: number;
   details: string;
+  structuralValidity?: 'passed';
+  visualFidelity?: { status: 'not_measured'; reason: string };
+  warnings?: string[];
   fidelityAudit?: {
     typographyPreserved: boolean;
     layoutPreserved: boolean;
@@ -46,8 +53,8 @@ function enforceFactualMetadata(
   if (!doc || typeof doc !== 'object') return;
   doc.meta = {
     sourceImageHash: sourceHash,
-    sourceWidth: typeof doc.meta?.sourceWidth === 'number' && doc.meta.sourceWidth > 0 ? doc.meta.sourceWidth : (sourceAsset?.width || 1440),
-    sourceHeight: typeof doc.meta?.sourceHeight === 'number' && doc.meta.sourceHeight > 0 ? doc.meta.sourceHeight : (sourceAsset?.height || 900),
+    sourceWidth: sourceAsset.width,
+    sourceHeight: sourceAsset.height,
     analysisProvider: provider,
     analysisModel: model,
     analysisTimestamp: doc.meta?.analysisTimestamp || new Date().toISOString(),
@@ -74,30 +81,44 @@ export class ConversionOrchestrator {
       throw new Error(`Job ${jobId} not found`);
     }
 
+    let activeStage: StageName = 'upload_validation';
+    const markStatus = async (status: JobStatus, stage: StageName): Promise<void> => {
+      activeStage = stage;
+      await this.updateStatus(jobId,status,stage);
+    };
     try {
       // Stage 1: VALIDATING_UPLOAD
-      await this.updateStatus(jobId, 'validating_upload', 'upload_validation');
+      await markStatus('validating_upload', 'upload_validation');
       const sourceAsset = job.sourceAssetId
         ? await prisma.asset.findUnique({ where: { id: job.sourceAssetId } })
         : null;
 
+      const source = await loadSourceImage(this.storage, sourceAsset, env.AI_REQUEST_TIMEOUT_MS);
+
       // Stage 2: ANALYZING_IMAGE -> DIR_READY
-      await this.updateStatus(jobId, 'analyzing_image', 'image_analysis');
+      await markStatus('analyzing_image', 'image_analysis');
 
       // Always execute fresh conversion without reusing prior database cache or artifacts
-      const dirDoc: DIRDocument = await this.executeDIRStage(job, sourceAsset);
+      const tiles = await prepareAnalysisImages(source);
+      const analyses: { document: DIRDocument; tile: AnalysisTile }[] = [];
+      for (const tile of tiles) {
+        analyses.push({ document: await this.executeDIRStage(job, { ...sourceAsset, width: tile.width, height: tile.height }, tile), tile });
+      }
+      const dirDoc = mergeTileDocuments(analyses, source);
+      const mergedValidation = validateDIR(dirDoc);
+      if (!mergedValidation.valid) throw new Error(`Merged DIR is invalid: ${JSON.stringify(mergedValidation.errors)}`);
 
-      await this.updateStatus(jobId, 'dir_ready', 'dir_validation');
+      await markStatus('dir_ready', 'dir_validation');
 
       // Resolve and extract sub-assets (e.g. hero graphic artwork, logos) from source image
-      await this.resolveAndExtractAssets(job, sourceAsset, dirDoc);
+      await this.resolveAndExtractAssets(job, sourceAsset, dirDoc, source);
 
       // Stage 3: GENERATING_ELEMENTOR (Stage C)
-      await this.updateStatus(jobId, 'generating_elementor', 'elementor_generation');
+      await markStatus('generating_elementor', 'elementor_generation');
       const { document: initialDoc, report } = convertDIRToElementor(dirDoc);
 
       // Stage 4: VALIDATING_ELEMENTOR & SELF-HEALING GATE (Stage D)
-      await this.updateStatus(jobId, 'validating_elementor', 'elementor_validation');
+      await markStatus('validating_elementor', 'elementor_validation');
       let elementorDoc = initialDoc;
       let validation = validateElementor(elementorDoc);
 
@@ -130,9 +151,12 @@ export class ConversionOrchestrator {
         }
       }
 
-      // Verify deterministic visual quality & structural completeness
-      const qualityAudit = this.verifyVisualQuality(dirDoc, elementorDoc, { sourceAssetPath: sourceAsset?.storagePath });
-      logger.info({ jobId, qualityAudit }, 'Visual quality verification passed');
+      if (!validation.valid) throw new Error(`Elementor compilation failed validation: ${JSON.stringify(validation.errors)}`);
+
+      // Verify structural completeness; rendered fidelity is not measured here.
+      const qualityAudit = this.verifyVisualQuality(dirDoc, elementorDoc, { sourceAssetPath: sourceAsset?.storagePath, nodeElementIds: report.nodeElementIds });
+      qualityAudit.warnings = [...(qualityAudit.warnings || []), ...report.warnings, ...validation.warnings.map(warning => warning.message)];
+      logger.info({ jobId, qualityAudit }, 'Structural verification completed; visual fidelity not measured');
 
       if (!validation.valid) {
         logger.warn({ jobId, errors: validation.errors }, 'Elementor validation warnings/errors encountered');
@@ -183,7 +207,7 @@ export class ConversionOrchestrator {
           fileName: `elementor-${jobId}.json`,
           mimeType: 'application/json',
           sizeBytes: BigInt(uploadRes.size),
-          storageProvider: 'local',
+          storageProvider: env.STORAGE_PROVIDER,
           storagePath: uploadRes.key,
           sha256: uploadRes.contentHash,
           metadata: {
@@ -199,7 +223,7 @@ export class ConversionOrchestrator {
         where: { id: jobId },
         data: {
           status: 'preview_ready',
-          currentStage: 'preview_rendering',
+          currentStage: 'elementor_validation',
           dirArtifact: dirDoc as any,
           elementorArtifact: elementorDoc as any,
         },
@@ -208,11 +232,18 @@ export class ConversionOrchestrator {
       logger.info({ jobId }, 'Conversion job completed successfully');
     } catch (err: any) {
       logger.error({ jobId, error: err.message }, 'Conversion job failed');
+      await prisma.jobStage.upsert({
+        where: { jobId_stage_attempt: { jobId, stage: activeStage, attempt: job.attempts || 1 } },
+        update: { status: 'failed', errorMessage: err.message },
+        create: { jobId, stage: activeStage, attempt: job.attempts || 1, status: 'failed', errorMessage: err.message },
+      }).catch(() => {});
       try {
         await prisma.conversionJob.update({
           where: { id: jobId },
           data: {
             status: 'failed',
+            dirArtifact: Prisma.DbNull,
+            elementorArtifact: Prisma.DbNull,
             errorMessage: err.message,
             errorDetails: { stack: err.stack },
           },
@@ -224,14 +255,15 @@ export class ConversionOrchestrator {
     }
   }
 
-  private async executeDIRStage(job: any, sourceAsset: any): Promise<DIRDocument> {
+  private async executeDIRStage(job: any, sourceAsset: any, analysis: AnalysisTile): Promise<DIRDocument> {
     const skillPack = loadSkillPack();
     const prompt = getImageAnalysisPrompt(
       {
         width: sourceAsset?.width || 1440,
         height: sourceAsset?.height || 900,
         mimeType: sourceAsset?.mimeType || 'image/png',
-        sha256: sourceAsset?.sha256 || 'mock-hash',
+        sha256: sourceAsset.sha256,
+        isTiled: analysis.totalTiles > 1, tileIndex: analysis.index, totalTiles: analysis.totalTiles, overlapY: 400,
       },
       skillPack.operativeInstructions
     );
@@ -240,36 +272,20 @@ export class ConversionOrchestrator {
       { type: 'text', text: prompt.userPrompt },
     ];
 
-    if (sourceAsset?.storagePath) {
-      try {
-        const imgBuffer = await this.storage.download(sourceAsset.storagePath);
-        const mime = sourceAsset.mimeType || 'image/png';
-        const dataUri = `data:${mime};base64,${imgBuffer.toString('base64')}`;
-        userParts.push({
-          type: 'image_url',
-          image_url: { url: dataUri },
-        });
-      } catch (err: any) {
-        logger.warn({ storagePath: sourceAsset.storagePath, err: err?.message }, 'Could not attach image buffer to vision request');
-      }
-    }
+    userParts.push({ type: 'image_url', image_url: {
+      url: `data:${analysis.mimeType};base64,${analysis.buffer.toString('base64')}`,
+    } });
 
     const sourceHash = sourceAsset?.sha256 || 'mock-hash';
     const schemaVer = '1.0.0';
     const skillVer = skillPack.meta.instructionHash || '1.0.0';
     const promptVer = prompt.version;
 
-    const visionModel =
-      env.VISION_AI_MODEL === 'gemini-3.8-flash' || !env.VISION_AI_MODEL
-        ? 'gemini-3.5-flash-lite'
-        : env.VISION_AI_MODEL;
-
     const aiRes = await this.aiRouter.execute({
       role: 'vision',
-      modelId: visionModel,
       messages: [
         { role: 'system', content: prompt.systemPrompt },
-        { role: 'user', content: userParts.length > 1 ? userParts : prompt.userPrompt },
+        { role: 'user', content: userParts },
       ],
       responseFormat: { type: 'json_object' },
       sourceImageHash: sourceHash,
@@ -282,7 +298,7 @@ export class ConversionOrchestrator {
     });
 
     // Check for explicit output truncation
-    if (aiRes.finishReason === 'length') {
+    if (['length', 'MAX_TOKENS'].includes(aiRes.finishReason || '')) {
       logger.warn({ jobId: job.id, provider: aiRes.provider }, 'AI vision response was truncated by output token limit (finishReason: length)');
       const cacheKey = this.aiRouter.computeCacheKey({
         sourceImageHash: sourceHash,
@@ -293,7 +309,9 @@ export class ConversionOrchestrator {
         stage: 'dir_generation',
       });
       await this.aiRouter.invalidateCacheKey(cacheKey);
+      throw new Error('AI vision output was truncated; retry with smaller image tiles');
     }
+    if (!aiRes.content?.trim()) throw new Error('AI vision returned empty output');
 
     const parsed = parseDIRFromAIOutput(aiRes.content);
     if ('error' in parsed) {
@@ -307,7 +325,7 @@ export class ConversionOrchestrator {
       });
       await this.aiRouter.invalidateCacheKey(cacheKey);
 
-      if (aiRes.finishReason === 'length') {
+      if (['length', 'MAX_TOKENS'].includes(aiRes.finishReason || '')) {
         throw new Error('AI generation was truncated due to output token limit (finish_reason: length). Could not parse complete DIR JSON.');
       }
       throw new Error(`Failed to parse AI output as DIR JSON: ${parsed.error}`);
@@ -468,239 +486,69 @@ export class ConversionOrchestrator {
   private async resolveAndExtractAssets(
     job: any,
     sourceAsset: any,
-    dirDoc: DIRDocument
+    dirDoc: DIRDocument,
+    source: SourceImage
   ): Promise<void> {
-    if (!dirDoc.assets) {
-      dirDoc.assets = [];
-    }
-
-    // 1. Traverse all pages and sections to collect all image nodes
-    const imageNodes: any[] = [];
-    const collectImageNodes = (node: any) => {
-      if (node.kind === 'image') {
-        imageNodes.push(node);
+    const references: { node: any; key: string; assetId: string }[] = [];
+    const visit = (value: any): void => {
+      if (!value || typeof value !== 'object') return;
+      if (value.kind === 'image' && !value.assetId) {
+        const assetId = `asset_${value.id}`;
+        dirDoc.assets.push({ id: assetId, type: 'image', role: value.alt || 'page-image',
+          confidence: value.confidence, sourceRect: value.sourceRect, url: value.url || value.imageUrl });
+        value.assetId = assetId;
       }
-      const children = node.children || node.nodes || node.elements;
-      if (children && Array.isArray(children)) {
-        for (const child of children) {
-          collectImageNodes(child);
-        }
-      }
+      if (typeof value.assetId === 'string') references.push({ node: value, key: 'url', assetId: value.assetId });
+      if (typeof value.backgroundImageAssetId === 'string') references.push({ node: value, key: 'backgroundImage', assetId: value.backgroundImageAssetId });
+      Object.values(value).forEach(visit);
     };
-
-    if (dirDoc.pages) {
-      for (const page of dirDoc.pages) {
-        if (page.sections) {
-          for (const sec of page.sections) {
-            const secChildren = sec.children || (sec as any).nodes || (sec as any).elements;
-            if (secChildren && Array.isArray(secChildren)) {
-              for (const child of secChildren) {
-                collectImageNodes(child);
-              }
-            }
-          }
+    visit(dirDoc.pages);
+    const resolved = new Map<string, { url: string; path: string }>();
+    for (const id of new Set(references.map(ref => ref.assetId))) {
+      const asset = dirDoc.assets.find(candidate => candidate.id === id);
+      if (!asset) throw new Error(`Missing referenced image asset '${id}'`);
+      let buffer: Buffer;
+      let mimeType: string;
+      let path = '';
+      if (asset.sourceRect) {
+        const rect = asset.sourceRect;
+        if (!Object.values(rect).every(Number.isFinite) || rect.x < 0 || rect.y < 0 || rect.width < 1 || rect.height < 1 || rect.x + rect.width > source.width + 1 || rect.y + rect.height > source.height + 1) {
+          throw new Error(`Image asset '${id}' has invalid sourceRect bounds`);
         }
+        buffer = await cropAsset(source.buffer, rect);
+        mimeType = 'image/png';
+        const hash = computeContentHash(buffer);
+        const key = `projects/${job.projectId}/assets/${hash}.png`;
+        const upload = await this.storage.upload(key, buffer, mimeType);
+        path = upload.key;
+        await prisma.asset.create({ data: {
+          projectId: job.projectId, fileName: `${hash}.png`, mimeType, sizeBytes: BigInt(buffer.length),
+          storageProvider: env.STORAGE_PROVIDER, storagePath: path, sha256: hash,
+          metadata: { extractedFromAssetId: sourceAsset.id, role: asset.role },
+        } });
+      } else {
+        const url = asset.url || asset.placeholder;
+        if (!url) throw new Error(`Image asset '${id}' has no usable source crop or URL; correct its sourceRect and retry`);
+        const inline = await resolveInlineImage(url, env.AI_REQUEST_TIMEOUT_MS);
+        buffer = Buffer.from(inline.data, 'base64');
+        mimeType = inline.mimeType;
       }
+      const url = `data:${mimeType};base64,${buffer.toString('base64')}`;
+      asset.url = url; asset.placeholder = url; asset.path = path;
+      resolved.set(id,{url,path});
     }
-
-    // 2. Ensure every image node has an asset registered in dirDoc.assets
-    for (const node of imageNodes) {
-      if (!node.assetId) {
-        node.assetId = `asset_${node.id || Math.random().toString(36).substring(2, 9)}`;
-      }
-      if (!dirDoc.assets.some((a) => a.id === node.assetId)) {
-        dirDoc.assets.push({
-          id: node.assetId,
-          type: 'image',
-          role: node.alt || 'page-image',
-          confidence: node.confidence || 0.95,
-          sourceRect: (node as any).sourceRect,
-        });
-      }
-    }
-
-    // 3. Download source asset buffer if available for cropping
-    let sourceBuffer: Buffer | null = null;
-    let meta: { width: number; height: number } | null = null;
-    if (sourceAsset?.storagePath) {
-      try {
-        sourceBuffer = await this.storage.download(sourceAsset.storagePath);
-        meta = await getImageMetadata(sourceBuffer);
-      } catch (err: any) {
-        logger.warn({ storagePath: sourceAsset.storagePath, err: err?.message }, 'Could not download/inspect source asset for sub-asset extraction');
-      }
-    }
-
-    // 4. Resolve and extract cropped assets for all visual assets or referenced assets
-    for (const asset of dirDoc.assets) {
-      const isReferencedByImage = imageNodes.some((n) => n.assetId === asset.id);
-      const isVisualType = ['image', 'logo', 'icon', 'background', 'placeholder'].includes(asset.type);
-
-      if ((isVisualType || isReferencedByImage) && !asset.placeholder) {
-        let cropBuffer: Buffer | null = null;
-
-        if (sourceBuffer) {
-          // Attempt A: Exact bounding box cropping from sourceRect
-          if (asset.sourceRect && asset.sourceRect.width >= 4 && asset.sourceRect.height >= 4) {
-            let safeRect = asset.sourceRect;
-            if (meta && meta.width > 0 && meta.height > 0) {
-              const clampedX = Math.max(0, Math.min(meta.width - 1, safeRect.x));
-              const clampedY = Math.max(0, Math.min(meta.height - 1, safeRect.y));
-              const clampedWidth = Math.min(meta.width - clampedX, Math.max(4, safeRect.width));
-              const clampedHeight = Math.min(meta.height - clampedY, Math.max(4, safeRect.height));
-              safeRect = { x: clampedX, y: clampedY, width: clampedWidth, height: clampedHeight };
-            }
-            try {
-              cropBuffer = await cropAsset(sourceBuffer, safeRect);
-            } catch (cropErr: any) {
-              logger.warn({ assetId: asset.id, err: cropErr?.message }, 'Failed to crop asset from sourceRect');
-            }
-          }
-        }
-
-        // Persist extracted cropBuffer to local storage & DB
-        if (cropBuffer) {
-          try {
-            const assetHash = computeContentHash(cropBuffer);
-            const storageKey = `projects/${job.projectId}/assets/${asset.id}_${assetHash.slice(0, 8)}.png`;
-            const uploadRes = await this.storage.upload(storageKey, cropBuffer, 'image/png');
-            const dataUri = `data:image/png;base64,${cropBuffer.toString('base64')}`;
-            asset.placeholder = dataUri;
-            asset.url = dataUri;
-            asset.path = uploadRes.key;
-
-            await prisma.asset.create({
-              data: {
-                projectId: job.projectId,
-                fileName: `${asset.id}.png`,
-                mimeType: 'image/png',
-                sizeBytes: BigInt(cropBuffer.length),
-                storageProvider: 'local',
-                storagePath: uploadRes.key,
-                sha256: assetHash,
-                metadata: {
-                  extractedFromAssetId: sourceAsset?.id || null,
-                  role: asset.role,
-                },
-              },
-            });
-            logger.info({ assetId: asset.id, storageKey }, 'Extracted and persisted cropped asset');
-          } catch (uploadErr: any) {
-            logger.warn({ assetId: asset.id, err: uploadErr?.message }, 'Failed to store extracted asset');
-          }
-        }
-
-        // If cropBuffer not available, fallback to designated standalone SVG asset placeholder
-        if (!asset.placeholder) {
-          const safeLabel = encodeURIComponent(asset.role || (asset as any).description || asset.id || 'Asset');
-          const svgDataUri = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><rect width="100%" height="100%" fill="%231e293b"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%2394a3b8" font-family="sans-serif" font-size="14">${safeLabel}</text></svg>`;
-          asset.placeholder = svgDataUri;
-          asset.url = svgDataUri;
-          asset.path = '';
-        }
-      }
-    }
-
-    // 5. Propagate resolved URLs and paths down to all image nodes and backgrounds in the DIR tree
-    const updateNodeUrls = (node: any) => {
-      if (node.kind === 'image') {
-        let matching = node.assetId ? dirDoc.assets?.find((a) => a.id === node.assetId) : null;
-        if (!matching && node.alt) {
-          matching = dirDoc.assets?.find((a) => a.role === node.alt || (a as any).description === node.alt);
-        }
-        if (matching) {
-          node.assetId = matching.id;
-          node.url = matching.url || matching.placeholder || node.url;
-          node.path = matching.path || (matching.placeholder?.startsWith('/storage/') ? matching.placeholder.replace(/^\/?storage\//, '') : '');
-          node.imageUrl = node.url;
-        } else if (node.url && !node.path && node.url.startsWith('/storage/')) {
-          node.path = node.url.replace(/^\/?storage\//, '');
-          node.imageUrl = node.url;
-        }
-        if (!node.url) {
-          const safeAlt = encodeURIComponent(node.alt || 'Image');
-          node.url = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><rect width="100%" height="100%" fill="%231e293b"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%2394a3b8" font-family="sans-serif" font-size="14">${safeAlt}</text></svg>`;
-          node.path = '';
-          node.imageUrl = node.url;
-        }
-      }
-
-      if (node.kind === 'image-box' || node.kind === 'testimonial') {
-        const matching = node.assetId ? dirDoc.assets?.find((a) => a.id === node.assetId) : null;
-        if (matching) {
-          node.url = matching.url || matching.placeholder || node.url;
-          node.path = matching.path || '';
-          node.imageUrl = node.url;
-        } else if (node.url && !node.path && node.url.startsWith('/storage/')) {
-          node.path = node.url.replace(/^\/?storage\//, '');
-          node.imageUrl = node.url;
-        }
-      }
-
-      if (node.kind === 'gallery' || node.kind === 'image-gallery') {
-        if (Array.isArray(node.images)) {
-          for (const img of node.images) {
-            const matching = img.assetId ? dirDoc.assets?.find((a) => a.id === img.assetId) : null;
-            if (matching) {
-              img.url = matching.url || matching.placeholder || img.url;
-              img.path = matching.path || '';
-              img.imageUrl = img.url;
-            } else if (img.url && !img.path && img.url.startsWith('/storage/')) {
-              img.path = img.url.replace(/^\/?storage\//, '');
-              img.imageUrl = img.url;
-            }
-          }
-        }
-      }
-
-      if (node.styles?.backgroundImageAssetId) {
-        const matching = dirDoc.assets?.find((a) => a.id === node.styles.backgroundImageAssetId);
-        if (matching) {
-          node.styles.backgroundImage = matching.url || matching.placeholder;
-          node.styles.backgroundImagePath = matching.path || '';
-        }
-      } else if (node.styles?.backgroundImage && !node.styles.backgroundImagePath && node.styles.backgroundImage.startsWith('/storage/')) {
-        node.styles.backgroundImagePath = node.styles.backgroundImage.replace(/^\/?storage\//, '');
-      }
-
-      const children = node.children || node.nodes || node.elements;
-      if (children && Array.isArray(children)) {
-        for (const child of children) {
-          updateNodeUrls(child);
-        }
-      }
-    };
-
-    if (dirDoc.pages) {
-      for (const page of dirDoc.pages) {
-        if (page.sections) {
-          for (const sec of page.sections) {
-            if (sec.styles?.backgroundImageAssetId) {
-              const matching = dirDoc.assets?.find((a) => a.id === sec.styles.backgroundImageAssetId);
-              if (matching) {
-                sec.styles.backgroundImage = matching.url || matching.placeholder;
-                sec.styles.backgroundImagePath = matching.path || '';
-              }
-            } else if (sec.styles?.backgroundImage && !sec.styles.backgroundImagePath && sec.styles.backgroundImage.startsWith('/storage/')) {
-              sec.styles.backgroundImagePath = sec.styles.backgroundImage.replace(/^\/?storage\//, '');
-            }
-
-            const secChildren = sec.children || (sec as any).nodes || (sec as any).elements;
-            if (secChildren && Array.isArray(secChildren)) {
-              for (const child of secChildren) {
-                updateNodeUrls(child);
-              }
-            }
-          }
-        }
-      }
+    for (const ref of references) {
+      const asset = resolved.get(ref.assetId)!;
+      ref.node[ref.key] = asset.url;
+      if (ref.key === 'url') { ref.node.imageUrl = asset.url; ref.node.path = asset.path; }
+      else ref.node.backgroundImagePath = asset.path;
     }
   }
 
   public verifyVisualQuality(
     dirDoc: DIRDocument,
     elementorDoc: any,
-    options?: { sourceAssetPath?: string; strictFidelity?: boolean }
+    options?: { sourceAssetPath?: string; strictFidelity?: boolean; nodeElementIds?: Record<string, string> }
   ): QualityAuditResult {
     if (!dirDoc.pages || !Array.isArray(dirDoc.pages) || dirDoc.pages.length === 0) {
       throw new Error('Quality verification failed: DIR document contains no pages');
@@ -803,66 +651,17 @@ export class ConversionOrchestrator {
       }
     }
 
-    // Design fidelity verification: verify that typography and layout directives in DIR are faithfully reflected in Elementor
-    let typographyPreserved = true;
-    let layoutPreserved = true;
-
-    const checkDirFidelity = (node: any) => {
-      if (node.kind === 'heading') {
-        const expectedSize = node.styles?.fontSize ?? node.typography?.font_size_px;
-        if (expectedSize && expectedSize >= 24) {
-          const hasMatchingSize = (elements: any[]): boolean => {
-            for (const el of elements) {
-              if (el.widgetType === 'heading' && el.settings?.typography_font_size?.size) {
-                return true;
-              }
-              if (el.elements && hasMatchingSize(el.elements)) return true;
-            }
-            return false;
-          };
-          if (!hasMatchingSize(elementorDoc.content)) {
-            logger.warn({ expectedSize }, 'Visual quality warning: Heading font size was not preserved in Elementor settings');
-            typographyPreserved = false;
-          }
-        }
-      }
-      if (node.kind === 'container' || node.kind === 'flex-group') {
-        const expectedDir = node.direction || node.styles?.flexDirection || node.layout_tree?.direction;
-        if (expectedDir === 'row') {
-          const hasRow = (elements: any[]): boolean => {
-            for (const el of elements) {
-              if (el.elType === 'container' && el.settings?.flex_direction === 'row') return true;
-              if (el.elements && hasRow(el.elements)) return true;
-            }
-            return false;
-          };
-          if (!hasRow(elementorDoc.content)) {
-            logger.warn('Visual quality warning: Horizontal row layout was not preserved in Elementor container');
-            layoutPreserved = false;
-          }
-        }
-      }
-      const children = node.children || node.nodes || node.elements;
-      if (Array.isArray(children)) {
-        for (const c of children) checkDirFidelity(c);
-      }
-    };
-
-    if (dirDoc.pages) {
-      for (const page of dirDoc.pages) {
-        if (page.sections) {
-          for (const sec of page.sections) {
-            const secChildren = sec.children || (sec as any).nodes || (sec as any).elements;
-            if (Array.isArray(secChildren)) {
-              for (const c of secChildren) checkDirFidelity(c);
-            }
-          }
-        }
-      }
-    }
+    const correspondenceWarnings = options?.nodeElementIds
+      ? auditCorrespondence(dirDoc, elementorDoc, options.nodeElementIds)
+      : ['Per-node correspondence was not checked: compiler source mapping is unavailable'];
+    const typographyPreserved = !correspondenceWarnings.some(w => w.includes('Typography'));
+    const layoutPreserved = Boolean(options?.nodeElementIds);
 
     return {
       passed: true,
+      structuralValidity: 'passed',
+      visualFidelity: { status: 'not_measured', reason: 'No WordPress/Elementor render comparison was performed' },
+      warnings: correspondenceWarnings,
       totalPages: dirDoc.pages.length,
       totalSections,
       totalDirNodes,
